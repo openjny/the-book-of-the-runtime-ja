@@ -1,16 +1,27 @@
-# Mixed Mode Assemblies
+# 混合モードアセンブリ (Mixed Mode Assemblies)
 
 ::: info 原文
 この章の原文は [Mixed Mode Assemblies](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/mixed-mode.md) です。
 :::
 
-## Introduction
-Most interoperability between managed and native code uses P/Invokes, COM, or WinRT. Since P/Invokes are bound to native code at runtime, they're susceptible to mistakes ranging from incorrect naming to subtle mistakes in signatures that cause stack corruption. COM can also be used to call from native to managed code, but it often requires registration and can add performance overhead. WinRT avoids those problems but isn't available in all cases.
+## はじめに
 
-C++/CLI provides a different, compiler-verified approach to interoperability called mixed-mode assemblies (also sometimes referred to as It-Just-Works or IJW). Rather than requiring that developers do special declarations like P/Invokes, the C++ compiler automatically generates everything needed to transition to and from managed and native code. Additionally, the C++ compiler decides whether a given C++ method should be managed or native, so even within an assembly, transitions happen regularly and without developer intervention required.
+マネージドコード (managed code) とネイティブコード (native code) の間の相互運用 (interoperability) のほとんどは、P/Invoke、COM、または WinRT を使用します。P/Invoke は実行時にネイティブコードにバインドされるため、名前の誤りからスタック破壊を引き起こすシグネチャの微妙なミスに至るまで、さまざまなミスが発生しやすくなっています。COM はネイティブからマネージドコードを呼び出す場合にも使用できますが、多くの場合レジストレーション (registration) が必要であり、パフォーマンスのオーバーヘッドが追加されることがあります。WinRT はこれらの問題を回避しますが、すべてのケースで利用できるわけではありません。
 
-## Calling Native Code
-C++/CLI code may call into either native code in the same assembly or a different library. Calls to a different library generates P/Invokes similar to those that might be written by hand in C# (but because the C++ compiler is reading that library's headers, the P/Invoke isn't subject to developer error). However, calls to the same assembly work differently. While P/Invokes to different libraries specify the name of the library and the name of an export to call, P/Invokes to the same library have a null entry point and set an RVA – an address within the library to call. In metadata, that looks like:
+::: tip 💡 初心者向け補足
+**P/Invoke** とは、C# などのマネージドコードからネイティブの C/C++ ライブラリ（DLL）の関数を呼び出すための仕組みです。Java でいう JNI（Java Native Interface）に相当します。たとえば、Windows API を C# から呼び出したい場合に `[DllImport("user32.dll")]` のように宣言して使います。ただし、関数名やシグネチャを手動で記述するため、間違いが起こりやすいという欠点があります。
+:::
+
+C++/CLI は、混合モードアセンブリ (mixed-mode assemblies) と呼ばれる、コンパイラによって検証された異なる相互運用アプローチを提供します（It-Just-Works または IJW と呼ばれることもあります）。開発者が P/Invoke のような特別な宣言を行う必要はなく、C++ コンパイラがマネージドコードとネイティブコードの間の遷移に必要なすべてを自動的に生成します。さらに、C++ コンパイラは各 C++ メソッドがマネージドかネイティブかを判断するため、同一のアセンブリ内であっても、開発者の介入なしに遷移が頻繁に行われます。
+
+::: tip 💡 初心者向け補足
+**C++/CLI** とは、Microsoft が提供する C++ の拡張言語で、ネイティブの C++ コードと .NET のマネージドコードを同じプロジェクト内で混在させることができます。「混合モード (mixed mode)」とは、1 つのアセンブリ（DLL や EXE）の中にネイティブコードとマネージドコードの両方が含まれている状態を指します。通常の C# や VB.NET ではすべてのコードが IL（中間言語）にコンパイルされますが、C++/CLI ではネイティブの機械語と IL が同居します。
+:::
+
+## ネイティブコードの呼び出し
+
+C++/CLI のコードは、同じアセンブリ内のネイティブコードまたは別のライブラリのネイティブコードを呼び出すことができます。別のライブラリへの呼び出しでは、C# で手書きされるものと同様の P/Invoke が生成されます（ただし、C++ コンパイラがそのライブラリのヘッダーを読み取るため、P/Invoke は開発者のミスの影響を受けません）。しかし、同じアセンブリ内への呼び出しは異なる動作をします。別のライブラリへの P/Invoke はライブラリの名前と呼び出すエクスポートの名前を指定しますが、同じライブラリへの P/Invoke はエントリポイントが null で、RVA（Relative Virtual Address、相対仮想アドレス）— ライブラリ内の呼び出し先アドレス — が設定されます。メタデータでは、次のようになります：
+
 ```
 MethodName: delete (060000EE)
 Flags     : [Assem] [Static] [ReuseSlot] [PinvokeImpl] [HasSecurity]  (00006013)
@@ -18,24 +29,37 @@ RVA       : 0x0001332a
 Pinvoke Map Data:
 Entry point:
 ```
-Calling these P/Invokes works the same as those that use named entry points with the exception of manually computing an address based on the module address and RVA instead of looking for an export.
 
-## Calling Managed Code
-While native->native calls and managed->native calls can be based on the address of native functions, native->managed calls cannot since the managed code is non-executable IL. To solve that, the compiler generates a lookup table that appears in the CIL metadata header as the ```.vtfixup``` table. ```Vtfixups``` in the library on disk map from an RVA to a managed method token. When the assembly is loaded, the CLR generates a native-callable marshaling stub for each method in the ```.vtfixup``` table that calls the corresponding managed method. It then replaces the tokens with the addresses of the stub methods. When native code goes to call a managed method, it calls indirectly via the new address in the ```.vtfixup``` table.
+これらの P/Invoke の呼び出しは、名前付きエントリポイントを使用する P/Invoke と同じように機能しますが、エクスポートを検索する代わりに、モジュールアドレスと RVA に基づいてアドレスを手動で計算する点が異なります。
 
-For example, if a native method in IjwLib.dll wants to call the managed Bar method with token 06000002, it emits:
+## マネージドコードの呼び出し
+
+ネイティブ→ネイティブの呼び出しやマネージド→ネイティブの呼び出しはネイティブ関数のアドレスに基づいて行うことができますが、ネイティブ→マネージドの呼び出しはそのようにできません。マネージドコードは実行不可能な IL であるためです。この問題を解決するために、コンパイラはルックアップテーブル (lookup table) を生成し、CIL メタデータヘッダーに `.vtfixup` テーブルとして表示されます。ディスク上のライブラリ内の `Vtfixup` は、RVA からマネージドメソッドトークン (managed method token) へのマッピングを行います。アセンブリがロードされると、CLR は `.vtfixup` テーブル内の各メソッドに対して、対応するマネージドメソッドを呼び出すネイティブ呼び出し可能なマーシャリングスタブ (marshaling stub) を生成します。そして、トークンをスタブメソッドのアドレスに置き換えます。ネイティブコードがマネージドメソッドを呼び出す際には、`.vtfixup` テーブル内の新しいアドレスを経由して間接的に呼び出します。
+
+::: tip 💡 初心者向け補足
+**vtfixup テーブル**は、ネイティブコードからマネージドコードを呼び出すための「橋渡し表」のようなものです。マネージドコードは IL（中間言語）のままではCPUが直接実行できないため、CLR がロード時に実行可能なスタブ（小さなコード片）を生成し、vtfixup テーブルのエントリをそのスタブのアドレスに書き換えます。これにより、ネイティブコードはあたかも通常の関数呼び出しをしているかのようにマネージドメソッドを呼び出すことができます。Java の JNI における関数テーブルの仕組みに似た概念です。
+:::
+
+たとえば、IjwLib.dll 内のネイティブメソッドが、トークン 06000002 を持つマネージドメソッド Bar を呼び出したい場合、次のように発行します：
+
 ```
 call    IjwLib!Bar (1000112b)
 ```
-At that address, it places a jump indirection:
+
+そのアドレスには、ジャンプ間接参照が配置されます：
+
 ```
 jmp     dword ptr [IjwLib!_mep?Bar$$FYAXXZ (10010008)]
 ```
-Where 10010008 matches a ```.vtfixup``` entry that looks like:
-```
-.vtfixup [1] int32 retainappdomain at D_00010008 // 06000002 (Bar's token)
-```
-According to ECMA 335, ```vtfixups``` can contain multiple entries. However, the Microsoft Visual C++ compiler (MSVC) does not appear to generate those. Vtfixups also contain flags for whether a call should go to the current thread's appdomain and whether the caller is unmanaged code. MSVC appears to always set those.
 
-## Starting the Runtime
-While a mixed mode assembly may be loaded into an already-running CLR, that isn't always the case. It's also possible for a mixed mode executable to start a process or for a running native process to load a mixed mode library and call into it. On .NET Framework (the only implementation that currently has this functionality), the native code's ```Main``` or ```DllMain``` calls into mscoree.dll's ```_CorDllMain``` function (which is resolved from a well-known location). When that happens, ```_CorDllMain``` is responsible for both starting the runtime and filling in vtfixups as described above.
+ここで 10010008 は、次のような `.vtfixup` エントリに一致します：
+
+```
+.vtfixup [1] int32 retainappdomain at D_00010008 // 06000002 (Bar のトークン)
+```
+
+ECMA 335 によると、`vtfixup` は複数のエントリを含むことができます。しかし、Microsoft Visual C++ コンパイラ (MSVC) はそのようなエントリを生成しないようです。vtfixup には、呼び出しが現在のスレッドのアプリケーションドメイン (AppDomain) に送られるべきかどうか、および呼び出し元がアンマネージドコードかどうかを示すフラグも含まれます。MSVC はこれらのフラグを常に設定するようです。
+
+## ランタイムの起動
+
+混合モードアセンブリは、すでに実行中の CLR にロードされる場合もありますが、常にそうとは限りません。混合モードの実行可能ファイルがプロセスを開始したり、実行中のネイティブプロセスが混合モードライブラリをロードして呼び出したりすることもあります。.NET Framework（現在この機能を持つ唯一の実装）では、ネイティブコードの `Main` または `DllMain` が mscoree.dll の `_CorDllMain` 関数を呼び出します（既知の場所から解決されます）。その際、`_CorDllMain` はランタイムの起動と、上記で説明したvtfixup の書き込みの両方を担当します。

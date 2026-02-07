@@ -1,88 +1,104 @@
-# Stack Walking
+# CLR におけるスタックウォーキング
 
 ::: info 原文
-この章の原文は [Stack Walking](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/stackwalking.md) です。
+この章の原文は [Stackwalking in the CLR](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/stackwalking.md) です。
 :::
 
-Author: Rudi Martin ([@Rudi-Martin](https://github.com/Rudi-Martin)) - 2008
+著者: Rudi Martin ([@Rudi-Martin](https://github.com/Rudi-Martin)) - 2008
 
-The CLR makes heavy use of a technique known as stack walking (or stack crawling). This involves iterating the sequence of call frames for a particular thread, from the most recent (the thread's current function) back down to the base of the stack.
+CLR はスタックウォーキング (stack walking)、またはスタッククローリング (stack crawling) と呼ばれる技術を多用しています。これは、特定のスレッドのコールフレーム (call frame) のシーケンスを、最新のもの（そのスレッドが現在実行中の関数）からスタックのベース（底）まで順にたどる処理です。
 
-The runtime uses stack walks for a number of purposes:
+::: tip 💡 初心者向け補足
+スタックウォーキングとは、プログラムの「呼び出し履歴」を順番にたどっていく処理のことです。たとえば Java の `Thread.getStackTrace()` でスタックトレースを取得するとき、内部的にはこれと同様の処理が行われています。CLR ではガベージコレクション (GC)、例外処理、デバッグなど、さまざまな場面でこの技術が使われています。
+:::
 
-- The runtime walks the stacks of all threads during garbage collection, looking for managed roots (local variables holding object references in the frames of managed methods that need to be reported to the GC to keep the objects alive and possibly track their movement if the GC decides to compact the heap).
-- On some platforms the stack walker is used during the processing of exceptions (looking for handlers in the first pass and unwinding the stack in the second).
-- The debugger uses the functionality when generating managed stack traces.
-- Various miscellaneous methods, usually those close to some public managed API, perform a stack walk to pick up information about their caller (such as the method, class or assembly of that caller).
+ランタイムはスタックウォークをさまざまな目的で使用しています：
 
-# The Stack Model
+- ガベージコレクション (GC) の実行中に、すべてのスレッドのスタックをウォークして、マネージドルート (managed root)（マネージドメソッドのフレーム内にあるオブジェクト参照を保持するローカル変数で、オブジェクトを生存状態に保つため、またGCがヒープをコンパクションする場合にオブジェクトの移動を追跡するために、GCに報告する必要があるもの）を探します。
+- 一部のプラットフォームでは、例外処理の際にスタックウォーカーが使用されます（第1パスではハンドラーの検索、第2パスではスタックのアンワインド (unwind) を行います）。
+- デバッガーがマネージドスタックトレース (managed stack trace) を生成する際に、この機能を使用します。
+- さまざまな雑多なメソッド、通常はパブリックなマネージド API に近いメソッドが、呼び出し元に関する情報（呼び出し元のメソッド、クラス、アセンブリなど）を取得するためにスタックウォークを実行します。
 
-Here we define some common terms and describe the typical layout of a thread's stack.
+## スタックモデル
 
-Logically, a stack is divided up into some number of _frames_. Each frame represents some function (managed or unmanaged) that is either currently executing or has called into some other function and is waiting for it to return. A frame contains state required by the specific invocation of its associated function. Typically this includes space for local variables, pushed arguments for a call to another function, saved caller registers etc.
+ここでは、いくつかの一般的な用語を定義し、スレッドのスタックの典型的なレイアウトについて説明します。
 
-The exact definition of a frame varies from platform to platform and on many platforms there isn't a hard definition of a frame format that all functions adhere to (x86 is an example of this). Instead the compiler is often free to optimize the exact format of frames. On such systems it is not possible to guarantee that a stackwalk will return 100% correct or complete results (for debugging purposes, debug symbols such as pdbs are used to fill in the gaps so that debuggers can generate more accurate stack traces).
+論理的には、スタックはいくつかの _フレーム (frame)_ に分割されます。各フレームは、現在実行中であるか、別の関数を呼び出してその戻りを待っている、何らかの関数（マネージドまたはアンマネージド）を表します。フレームには、関連付けられた関数の特定の呼び出しに必要な状態が含まれます。通常、これにはローカル変数のためのスペース、別の関数への呼び出しのためにプッシュされた引数、保存された呼び出し元のレジスタなどが含まれます。
 
-This is not a problem for the CLR, however, since we do not require a fully generalized stack walk. Instead we are only interested in those frames that are managed (i.e. represent a managed method) or, to some extent, frames coming from unmanaged code used to implement part of the runtime itself. In particular there is no guarantee about fidelity of 3rd party unmanaged frames other than to note where such frames transition into or out of the runtime itself (i.e. one of the frame types we do care about).
+::: tip 💡 初心者向け補足
+「フレーム」は、関数が1回呼び出されるたびにスタック上に作成される領域です。Java でも同様に、メソッド呼び出しごとに「スタックフレーム」が作られ、ローカル変数や引数が格納されます。たとえば `methodA()` が `methodB()` を呼ぶと、スタック上には `methodA` のフレームの上に `methodB` のフレームが積まれます。`methodB` が戻ると、そのフレームは破棄されます。
+:::
 
-Because we control the format of the frames we're interested in (we'll delve into the details of this later) we can ensure that those frames are crawlable with 100% fidelity. The only additional requirement is a mechanism to link disjoint groups of runtime frames together such that we can skip over any intervening unmanaged (and otherwise uncrawlable) frames.
+フレームの正確な定義はプラットフォームによって異なり、多くのプラットフォームでは、すべての関数が従う厳格なフレーム形式の定義がありません（x86 はその一例です）。代わりに、コンパイラはフレームの正確な形式を自由に最適化できます。このようなシステムでは、スタックウォークが100%正確で完全な結果を返すことを保証することはできません（デバッグ目的では、pdb などのデバッグシンボルを使用してギャップを埋め、デバッガーがより正確なスタックトレースを生成できるようにしています）。
 
-The following diagram illustrates a stack containing all the frames types (note that this document uses a convention where stacks grow towards the top of the page):
+しかし、CLR にとってはこれは問題になりません。完全に汎用的なスタックウォークは必要ないからです。代わりに、CLR が関心を持つのは、マネージドフレーム（つまりマネージドメソッドを表すもの）、または、ある程度はランタイム自体の一部を実装するために使用されるアンマネージドコードからのフレームだけです。特に、サードパーティのアンマネージドフレームの忠実性について保証はなく、そのようなフレームがランタイム自体への遷移またはランタイムからの遷移を行う箇所を記録することのみが保証されます（つまり、私たちが関心を持つフレームの種類の1つです）。
+
+私たちが関心を持つフレームの形式を制御しているため（詳細は後述します）、それらのフレームが100%の忠実性でクロール可能であることを保証できます。追加で必要な仕組みは、ランタイムフレームの分断されたグループを互いにリンクし、間にあるアンマネージド（でなければクロール不可能な）フレームをスキップできるようにするメカニズムだけです。
+
+以下の図は、すべてのフレームタイプを含むスタックを示しています（このドキュメントでは、スタックがページの上方向に成長する慣例を使用しています）：
 
 ![image](./images/stack.png)
 
-# Making Frames Crawlable
+## フレームをクロール可能にする
 
-## Managed Frames
+## マネージドフレーム
 
-Because the runtime owns and controls the JIT (Just-in-Time compiler) it can arrange for managed methods to always leave a crawlable frame. One solution here would be to utilize a rigid frame format for all methods (e.g. the x86 EBP frame format). In practice, however, this can be inefficient, especially for small leaf methods (such as typical property accessors).
+ランタイムが JIT（ジャストインタイムコンパイラ）を所有・制御しているため、マネージドメソッドが常にクロール可能なフレームを残すように調整できます。ここでの1つの解決策は、すべてのメソッドに固定的なフレーム形式（たとえば x86 の EBP フレーム形式）を利用することです。しかし実際には、特に小さなリーフメソッド (leaf method)（典型的なプロパティアクセサなど）に対しては、これは非効率的になる可能性があります。
 
-Since methods are typically called more times than their frames are crawled (stack crawls are relatively rare in the runtime, at least with respect to the rate at which methods are typically called) it makes sense to trade method call performance for some additional crawl time processing. As a result the JIT generates additional metadata for each method it compiles that includes sufficient information for the stack crawler to decode a stack frame belonging to that method.
+メソッドは通常、そのフレームがクロールされる回数よりもはるかに多くの回数呼び出されます（スタッククロールは、メソッドが通常呼び出される頻度に比べると、ランタイム内では比較的まれです）。そのため、メソッド呼び出しのパフォーマンスを犠牲にして、クロール時の追加処理に充てることは合理的です。その結果、JIT はコンパイルする各メソッドに対して追加のメタデータ (metadata) を生成し、そのメソッドに属するスタックフレームをスタッククローラーがデコードするのに十分な情報を含めます。
 
-This metadata can be found via a hash-table lookup with an instruction pointer somewhere within the method as the key. The JIT utilizes compression techniques in order to minimize the impact of this additional per-method metadata.
+::: tip 💡 初心者向け補足
+JIT コンパイラは、メソッドを機械語にコンパイルする際に、「このメソッドのスタックフレームをどう読み解くか」という情報も一緒に記録します。これは「アンワインド情報 (unwind info)」と呼ばれる一種のメタデータです。Java の JVM でも同様に、各メソッドのスタックフレームに関するメタデータ（スタックマップなど）が生成されます。このメタデータがあるからこそ、GC が「このフレームのどこにオブジェクト参照があるか」を正確に特定できるのです。
+:::
 
-Given initial values for a few important registers (e.g. EIP, ESP and EBP on x86 based systems) the stack crawler can locate a managed method and its associated JIT metadata and use this information to roll back the register values to those current in the method's caller. In this fashion a sequence of managed method frames can be traversed from the most recent to the oldest caller. This operation is sometimes referred to as a _virtual unwind_ (virtual because we're not actually updating the real values of ESP etc., leaving the stack intact).
+このメタデータは、メソッド内のどこかの命令ポインタ (instruction pointer) をキーとしたハッシュテーブルの検索によって見つけることができます。JIT はこの追加のメソッドごとのメタデータの影響を最小限にするために、圧縮技術を利用しています。
 
-## Runtime Unmanaged Frames
+いくつかの重要なレジスタの初期値（たとえば x86 ベースのシステムでは EIP、ESP、EBP）が与えられると、スタッククローラーはマネージドメソッドとそれに関連する JIT メタデータを見つけ、この情報を使用してレジスタの値をそのメソッドの呼び出し元の時点の値に巻き戻すことができます。このようにして、マネージドメソッドフレームのシーケンスを最新のものから最も古い呼び出し元の順にたどることができます。この操作は _仮想アンワインド (virtual unwind)_ と呼ばれることがあります（ESP などの実際の値は更新せず、スタックをそのまま保持するため「仮想」と呼ばれます）。
 
-The runtime is partially implemented in unmanaged code (e.g. coreclr.dll). Most of this code is special in that it operates as _manually managed_ code. That is, it obeys many of the rules and protocols of managed code but in an explicitly controlled fashion. For instance such code can explicitly enable or disable GC pre-emptive mode and needs to manage its use of object references accordingly.
+## ランタイムアンマネージドフレーム
 
-Another area where this careful interaction with managed code comes into play is during stackwalks. Since the majority of the runtime's unmanaged code is written in C++ we don't have the same control over method frame format as managed code. At the same time there are many instances where runtime unmanaged frames contain information that is important during a stack walk. These include cases where unmanaged functions hold object references in local variables (which must be reported during garbage collections) and exception processing.
+ランタイムは部分的にアンマネージドコード（たとえば coreclr.dll）で実装されています。このコードの大部分は特殊であり、_手動マネージド (manually managed)_ コードとして動作します。つまり、マネージドコードの多くのルールやプロトコルに従いますが、明示的に制御された方法で行います。たとえば、このようなコードは GC プリエンプティブモード (pre-emptive mode) を明示的に有効化・無効化でき、それに応じてオブジェクト参照の使用を管理する必要があります。
 
-Rather than attempt to make each unmanaged frame crawable, unmanaged functions with interesting data to report to stack crawls bundle up the information into a data structure called a Frame. The choice of name is unfortunate as it can lead to ambiguity in stack related discussions. This document will always refer to the data structure variant as a capitalized Frame.
+マネージドコードとの注意深い相互作用が関係するもう1つの領域が、スタックウォーク中です。ランタイムのアンマネージドコードの大部分は C++ で記述されているため、マネージドコードのようにメソッドフレーム形式を制御することはできません。同時に、ランタイムのアンマネージドフレームにスタックウォーク中に重要な情報が含まれるケースは多くあります。これには、アンマネージド関数がローカル変数にオブジェクト参照を保持している場合（ガベージコレクション中に報告する必要があります）や、例外処理の場合が含まれます。
 
-Frame is actually the abstract base class of an entire hierarchy of Frame types. Frame is sub-typed in order to express different types of information that might be interesting to a stack walk.
+各アンマネージドフレームをクロール可能にするのではなく、スタッククロールに報告すべき興味深いデータを持つアンマネージド関数は、情報を Frame と呼ばれるデータ構造にまとめます。この名前の選択は、スタック関連の議論で曖昧さを招く可能性があるため、残念なものです。このドキュメントでは、データ構造としての Frame は常に大文字で記述します。
 
-But how does the stack walker find these Frames and how do they relate to the frames utilized by managed methods?
+::: tip 💡 初心者向け補足
+ここで言う「Frame」（大文字）は、C++ のクラス階層として実装されたデータ構造であり、一般的な「フレーム」（小文字）とは異なります。一般的なフレームは関数呼び出しごとにスタック上に自動的に作られる領域ですが、Frame（大文字）はランタイムのアンマネージドコードがスタックウォーカーに情報を伝えるために明示的に作成・管理するオブジェクトです。Java で例えると、JNI (Java Native Interface) 経由でネイティブコードを呼び出す際に JVM が管理するフレーム情報に近い概念です。
+:::
 
-Each Frame is part of a singly linked list, having a next pointer to the next oldest Frame on this thread's stack (or null if the Frame is the oldest). The CLR Thread structure holds a pointer to the newest Frame. Unmanaged runtime code can push or pop Frames as needed by manipulating the Thread structure and Frame list.
+Frame は実際には Frame 型の階層全体の抽象基底クラス (abstract base class) です。Frame はサブタイプ化され、スタックウォークにとって興味深いさまざまな種類の情報を表現します。
 
-In this fashion the stack walker can iterate unmanaged Frames in newest to oldest order (the same order in which managed frames are iterated). But managed and unmanaged methods can be interleaved, and it would be wrong to process all managed frames followed by unmanaged Frames or vice versa since that would not accurately represent the real calling sequence.
+では、スタックウォーカーはこれらの Frame をどのように見つけ、マネージドメソッドのフレームとどのように関連付けるのでしょうか？
 
-To solve this problem Frames are further restricted in that they must be allocated on the stack in the frame of the method that pushes them onto the Frame list. Since the stack walker knows the stack bounds of each managed frame it can perform simple pointer comparisons to determine whether a given Frame is older or newer than a given managed frame.
+各 Frame は単方向リンクリスト (singly linked list) の一部であり、このスレッドのスタック上の次に古い Frame への next ポインタを持ちます（その Frame が最も古い場合は null）。CLR の Thread 構造体は最新の Frame へのポインタを保持しています。アンマネージドランタイムコードは、Thread 構造体と Frame リストを操作することで、必要に応じて Frame をプッシュまたはポップできます。
 
-Essentially the stack walker, having decoded the current frame, always has two possible choices for the next (older) frame: the next managed frame determined via a virtual unwind of the register set or the next oldest Frame on the Thread's Frame list. It can decide which is appropriate by determining which occupies stack space nearer the stack top. The actual calculation involved is platform dependent but usually devolves to one or two pointer comparisons.
+この方式により、スタックウォーカーはアンマネージド Frame を最新から最古の順にイテレートできます（マネージドフレームがイテレートされるのと同じ順序です）。しかし、マネージドメソッドとアンマネージドメソッドはインターリーブ（交互に混在）できるため、すべてのマネージドフレームを処理してからアンマネージド Frame を処理する、またはその逆を行うのは、実際の呼び出しシーケンスを正確に表現しないため、誤りとなります。
 
-When managed code calls into the unmanaged runtime one of several forms of transition Frame is often pushed by the unmanaged target method. This is needed both to record the register state of the calling managed method (so that the stack walker can resume virtual unwinding of managed frames once it has finished enumerating the unmanaged Frames) and in many cases because managed object references are passed as arguments to the unmanaged method and must be reported to the GC in the event of a garbage collection.
+この問題を解決するために、Frame にはさらに制約が課されています。Frame は、Frame リストにプッシュするメソッドのフレーム内のスタック上に割り当てなければなりません。スタックウォーカーは各マネージドフレームのスタック境界を知っているため、単純なポインタ比較を行うことで、特定の Frame が特定のマネージドフレームよりも新しいか古いかを判断できます。
 
-A full description of the available Frame types and their uses is beyond the scope of the document. Further details can be found in the [frames.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/frames.h) header file.
+本質的に、スタックウォーカーは現在のフレームをデコードした後、次の（より古い）フレームについて常に2つの選択肢を持ちます。レジスタセットの仮想アンワインドによって決定される次のマネージドフレームか、Thread の Frame リスト上の次に古い Frame のいずれかです。どちらが適切かは、どちらがスタックトップにより近いスタック空間を占めているかを判断することで決定できます。実際の計算はプラットフォームに依存しますが、通常は1つまたは2つのポインタ比較に帰着します。
 
-# Stackwalker Interface
+マネージドコードがアンマネージドランタイムを呼び出す際、いくつかの形式のトランジション Frame (transition Frame) の1つが、アンマネージドのターゲットメソッドによってプッシュされることがよくあります。これは、呼び出し元のマネージドメソッドのレジスタ状態を記録するため（スタックウォーカーがアンマネージド Frame の列挙を終えた後、マネージドフレームの仮想アンワインドを再開できるようにするため）と、多くの場合、マネージドオブジェクト参照がアンマネージドメソッドに引数として渡され、ガベージコレクションが発生した場合に GC に報告する必要があるために必要です。
 
-The full stack walk interface is exposed to runtime unmanaged code only (a simplified subset is available to managed code via the System.Diagnostics.StackTrace class). The typical entrypoint is via the StackWalkFramesEx() method on the runtime Thread class.
+利用可能な Frame の種類とその用途の完全な説明は、このドキュメントの範囲外です。詳細については [frames.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/frames.h) ヘッダーファイルを参照してください。
 
-The caller of this method provides three main inputs:
+## スタックウォーカーインターフェイス
 
-1. Some context indicating the starting point of the walk. This is either an initial register set (for instance if you've suspended the target thread and can call GetThreadContext() on it) or an initial Frame (in cases where you know the code in question is in runtime unmanaged code). Although most stack walks are made from the top of the stack it's possible to start lower down if you can determine the correct starting context.
-2. A function pointer and associated context. The function provided is called by the stack walker for each interesting frame (in order from the newest to the oldest). The context value provided is passed to each invocation of the callback so that it can record or build up state during the walk.
-3. Flags indicating what sort of frames should trigger a callback. This allows the caller to specify that only pure managed method frames should be reported for instance. For a full list see [threads.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/threads.h) (just above the declaration of StackWalkFramesEx()).
+完全なスタックウォークインターフェイスは、ランタイムのアンマネージドコードにのみ公開されています（マネージドコードには `System.Diagnostics.StackTrace` クラスを通じて簡略化されたサブセットが利用可能です）。一般的なエントリポイントは、ランタイムの Thread クラスの `StackWalkFramesEx()` メソッドです。
 
-StackWalkFramesEx() returns an enum value that indicates whether the walk terminated normally (got to the stack base and ran out of methods to report), was aborted by one of the callbacks (the callbacks return an enum of the same type to the stack walk to control this) or suffered some other miscellaneous error.
+このメソッドの呼び出し元は、3つの主要な入力を提供します：
 
-Aside from the context value passed to StackWalkFramesEx(), stack callback functions are passed one other piece of context: the CrawlFrame. This class is defined in [stackwalk.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/stackwalk.h) and contains all sorts of context gathered as the stack walk proceeds.
+1. ウォークの開始点を示すコンテキスト。これは初期レジスタセット（たとえば、ターゲットスレッドをサスペンドして `GetThreadContext()` を呼び出せる場合）、または初期 Frame（対象のコードがランタイムのアンマネージドコード内にあることがわかっている場合）のいずれかです。ほとんどのスタックウォークはスタックのトップから行われますが、正しい開始コンテキストを決定できる場合は、より下の位置から開始することも可能です。
+2. 関数ポインタと関連するコンテキスト。提供された関数は、スタックウォーカーが各興味深いフレームに対して（最新から最古の順に）呼び出します。提供されたコンテキスト値は、コールバックの各呼び出しに渡され、ウォーク中に状態を記録したり蓄積したりできるようにします。
+3. どの種類のフレームがコールバックをトリガーすべきかを示すフラグ。これにより、呼び出し元はたとえば純粋なマネージドメソッドフレームのみを報告するよう指定できます。完全なリストについては [threads.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/threads.h)（`StackWalkFramesEx()` の宣言のすぐ上）を参照してください。
 
-For instance the CrawlFrame indicates the MethodDesc* for managed frames and the Frame* for unmanaged Frames. It also provides the current register set inferred by virtually unwinding frames up to that point.
+`StackWalkFramesEx()` はウォークが正常に終了したか（スタックのベースに到達し、報告すべきメソッドがなくなった）、コールバックの1つによって中断されたか（コールバックはこれを制御するために、スタックウォークに同じ型の enum を返します）、その他の雑多なエラーが発生したかを示す enum 値を返します。
 
-# Stackwalk Implementation Details
+`StackWalkFramesEx()` に渡されるコンテキスト値の他に、スタックコールバック関数にはもう1つのコンテキストが渡されます。それは CrawlFrame です。このクラスは [stackwalk.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/stackwalk.h) で定義されており、スタックウォークの進行に伴って収集されるさまざまなコンテキストを含みます。
 
-Further low-level details of the stack walk implementation are currently outside the scope of this document. If you have knowledge of these and would care to share that knowledge please feel free to update this document.
+たとえば、CrawlFrame はマネージドフレームの `MethodDesc*` やアンマネージド Frame の `Frame*` を示します。また、その時点までフレームを仮想アンワインドすることで推定された現在のレジスタセットも提供します。
+
+## スタックウォークの実装の詳細
+
+スタックウォーク実装のさらに低レベルの詳細は、現在このドキュメントの範囲外です。これらに関する知見をお持ちの方は、ぜひこのドキュメントを更新してその知識を共有してください。

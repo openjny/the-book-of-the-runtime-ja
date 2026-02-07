@@ -1,97 +1,109 @@
-# ReadyToRun Platform Native Envelope
+# ReadyToRun プラットフォームネイティブエンベロープ
 
 ::: info 原文
 この章の原文は [ReadyToRun Platform Native Envelope](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/readytorun-platform-native-envelope.md) です。
 :::
 
-Up through .NET 10, ReadyToRun (R2R) uses the Windows PE format as the native envelope on every platform. Non‑Windows platforms therefore load a PE file with the .NET loader performing the required fixups and code activation.
+.NET 10 まで、ReadyToRun (R2R) はすべてのプラットフォームでネイティブエンベロープ (envelope) として Windows PE 形式を使用しています。そのため、非 Windows プラットフォームでは、.NET ローダーが必要なフィックスアップ (fixup) とコードの有効化を行いながら PE ファイルを読み込みます。
 
-In .NET 11, we plan to start adding support beyond the PE format. We will target support for:
-- Composite R2R only
-- Mach-O object files emitted by `crossgen2`
-- Runtime using a composite R2R image that is a Mach-O shared library
-   - Linking the object files into a shared library is expected to be handled by the SDK and is not covered in this document.
+::: tip 💡 初心者向け補足
+PE（Portable Executable）形式は Windows 独自の実行可能ファイル形式です。.NET ではこれまで、macOS や Linux 上でも PE 形式のファイルをラップして R2R イメージを配布していました。「エンベロープ (envelope)」とは、ネイティブコードを包む外側のファイル形式のことを指します。この章では、macOS 向けに Mach-O 形式という macOS ネイティブの形式をサポートする計画について説明します。
+:::
 
-The tentative high-level design is outlined below. As we implement this support, this document should be updated with more details and the [ReadyToRun overview](./readytorun-overview) and [ReadyToRun format](./readytorun-format) should be updated to reflect the changes.
+.NET 11 では、PE 形式を超えたサポートの追加を開始する予定です。対象とするサポートは以下のとおりです：
 
-## crossgen2: producing Mach-O object files
+- コンポジット (composite) R2R のみ
+- `crossgen2` が出力する Mach-O オブジェクトファイル
+- ランタイムが Mach-O 共有ライブラリであるコンポジット R2R イメージを使用すること
+  - オブジェクトファイルを共有ライブラリにリンクする処理は SDK が担当することを想定しており、このドキュメントでは扱いません。
 
-Mach‑O support will only be supported for composite ReadyToRun when the target OS is macOS. It will be opt-in via a new `crossgen2` flag:
+以下に暫定的なハイレベル設計の概要を示します。このサポートの実装に伴い、このドキュメントはより詳細に更新されるべきであり、[ReadyToRun 概要](./readytorun-overview)および [ReadyToRun フォーマット](./readytorun-format)も変更を反映して更新されるべきです。
+
+## crossgen2: Mach-O オブジェクトファイルの生成
+
+Mach-O サポートは、ターゲット OS が macOS の場合に限り、コンポジット ReadyToRun でのみサポートされます。新しい `crossgen2` フラグによりオプトインで有効化します：
 
 - `--obj-format macho`
 
-`crossgen2` will:
+`crossgen2` は以下を行います：
 
-- Produce a Mach-O object file as the composite R2R image with the `RTR_HEADER` export for the `READYTORUN_HEADER`.
-- Mark each input IL assembly as a component R2R assembly: `READYTORUN_FLAG_COMPONENT`.
-- Mark each input IL assembly with a new flag indicating that the associated composite image is in the platform-native format: `READYTORUN_FLAG_PLATFORM_NATIVE_IMAGE`
+- `READYTORUN_HEADER` の `RTR_HEADER` エクスポートを含むコンポジット R2R イメージとして Mach-O オブジェクトファイルを生成する。
+- 各入力 IL アセンブリをコンポーネント R2R アセンブリとしてマークする：`READYTORUN_FLAG_COMPONENT`。
+- 各入力 IL アセンブリに、関連するコンポジットイメージがプラットフォームネイティブ形式であることを示す新しいフラグを設定する：`READYTORUN_FLAG_PLATFORM_NATIVE_IMAGE`
 
-`crossgen2` does not produce the final shared library. A separate SDK / build linking step must preserve the `RTR_HEADER` export in the final `dylib`.
+`crossgen2` は最終的な共有ライブラリを生成しません。別途 SDK / ビルドのリンクステップで、最終的な `dylib` に `RTR_HEADER` エクスポートを保持する必要があります。
 
-### Mach-O Emitter Decisions
+::: tip 💡 初心者向け補足
+コンポジット R2R とは、複数の .NET アセンブリのネイティブコードを1つの R2R イメージにまとめたものです。`crossgen2` は .NET の AOT（事前コンパイル）ツールで、IL コードからネイティブコードを含む R2R イメージを生成します。ここでは `crossgen2` がまず Mach-O オブジェクトファイル（`.o`）を出力し、それを Apple のリンカ（`ld` など）で共有ライブラリ（`.dylib`）にリンクするという2段階の流れになります。
+:::
 
-There's a few cases in the R2R format that are not natively represented in the Mach-O format that have to be emulated. This section will describe some of the design decisions for the Mach-O R2R format.
+### Mach-O エミッタの設計判断
 
-#### Sections
+R2R フォーマットには Mach-O フォーマットではネイティブに表現できないケースがいくつかあり、エミュレーションが必要です。このセクションでは、Mach-O R2R フォーマットに関する設計判断について説明します。
 
+#### セクション
 
-Data moved out of `__TEXT,__text`:
+`__TEXT,__text` から移動されるデータ：
 
-- Precompiled managed code has been moved into `__TEXT,__managedcode`. `__TEXT,__text` gets special treatment by the linker and `__TEXT,__managedcode` matches NativeAOT.
-- Read-only data such as jump tables, CLR metadata, Win32 Resources, managed unwind info, gc info, and the R2R headers are moved to `__TEXT,__const`
+- プリコンパイル済みマネージドコードは `__TEXT,__managedcode` に移動されます。`__TEXT,__text` はリンカから特別な扱いを受けるため、`__TEXT,__managedcode` を使用します。これは NativeAOT と一致します。
+- ジャンプテーブル、CLR メタデータ、Win32 リソース、マネージドアンワインド情報 (unwind info)、GC 情報、R2R ヘッダーなどの読み取り専用データは `__TEXT,__const` に移動されます。
 
-Data that stays in the corresponding locations as the PE envelope:
+PE エンベロープと対応する場所に留まるデータ：
 
-- Read-write data, such as fixup tables: `__DATA,__data`
-- Import thunks: `__TEXT,__text`
+- フィックスアップテーブルなどの読み書き可能データ：`__DATA,__data`
+- インポートサンク (import thunk)：`__TEXT,__text`
 
-#### Relocations
+#### リロケーション
 
-Symbol ranges are represented differently in Mach-O than other platforms. Apple linkers have issues when multiple symbols are defined at the same location. Additionally, the Mach format natively supports a "subtractor" reloc to represent the distance between two symbols. As a result, we can represent the start of the symbol range as the start symbol of the range. We can represent the size of the range we can represent as "end symbol location - start symbol location + end symbol size".
+シンボル範囲 (symbol range) は、Mach-O では他のプラットフォームとは異なる方法で表現されます。Apple のリンカは、同じ場所に複数のシンボルが定義されている場合に問題が発生します。さらに、Mach フォーマットは2つのシンボル間の距離を表現する「サブトラクタ (subtractor)」リロケーションをネイティブにサポートしています。その結果、シンボル範囲の開始を範囲の開始シンボルとして表現できます。範囲のサイズは「終了シンボルの位置 - 開始シンボルの位置 + 終了シンボルのサイズ」として表現できます。
 
-#### Base Symbol and RVAs
+#### ベースシンボルと RVA
 
-The R2R format, like the PE format, is heavily based around having RVAs emitted into the image that can be added to the base symbol of the image. The COFF object file format natively supports such a concept, and the PE format uses such a concept in the PE header. However, other formats do not natively support such a concept.
+R2R フォーマットは PE フォーマットと同様に、イメージのベースシンボルに加算できる RVA（Relative Virtual Address、相対仮想アドレス）をイメージに出力することに大きく依存しています。COFF オブジェクトファイル形式はこの概念をネイティブにサポートしており、PE フォーマットも PE ヘッダーでこの概念を使用しています。しかし、他のフォーマットはこの概念をネイティブにサポートしていません。
 
-The Apple linker does provide a base symbol for the Mach format, but the base symbol depends on the output type, generally in the form `__mh_<output>_header`. For dylibs, the symbol is `__mh_dylib_header`. This symbol is located at the address returned by `dlinfo` and `dladdr` for the base address. It also points to the Mach header, which can be used to find the size of the image to bound reads of the R2R data.
+::: tip 💡 初心者向け補足
+RVA（相対仮想アドレス）とは、イメージがメモリに読み込まれたベースアドレスからの相対的なオフセットです。例えば、ベースアドレスが `0x10000` でメソッドが `0x10500` にある場合、RVA は `0x500` になります。PE 形式ではこの仕組みが組み込まれていますが、Mach-O 形式では同等の機能をエミュレーションする必要があります。
+:::
 
-As a result, we can emulate this support in the Mach format with ease:
+Apple のリンカは Mach フォーマット用のベースシンボルを提供していますが、そのベースシンボルは出力タイプに依存し、一般的に `__mh_<output>_header` の形式になります。dylib の場合、シンボルは `__mh_dylib_header` です。このシンボルはベースアドレスとして `dlinfo` や `dladdr` が返すアドレスに位置しています。また、Mach ヘッダーを指しており、R2R データの読み取り範囲を制限するためにイメージのサイズを確認するのにも使用できます。
 
-1. The base symbol that we use in the object writer will be `__mh_dylib_header`.
-2. To emit the distance from the base symbol, we will use a subtractor relocation to represent "symbol location - `__mh_dylib_header` location".
+その結果、Mach フォーマットでこのサポートを容易にエミュレーションできます：
 
-## Runtime: consuming a platform-native R2R image
+1. オブジェクトライター (object writer) で使用するベースシンボルは `__mh_dylib_header` とする。
+2. ベースシンボルからの距離を出力するために、サブトラクタリロケーション (subtractor relocation) を使用して「シンボルの位置 - `__mh_dylib_header` の位置」を表現する。
 
-The runtime will be updated to handle platform-native R2R images during assembly load.
+## ランタイム: プラットフォームネイティブ R2R イメージの使用
 
-1. Load IL assembly and determine if it is a R2R assembly.
-2. If it is not a component R2R assembly, proceed with existing R2R load logic.
-  - We will not have platform-native support for this scenario
-3. If it is a component R2R assembly with the new `READYTORUN_FLAG_PLATFORM_NATIVE_IMAGE` flag set:
-   a. Read `OwnerCompositeExecutable` value.
-   b. Invoke host callback with component assembly path and owner composite name.
-   c. On success, obtain pointer to composite `READYTORUN_HEADER` and use it for native method lookup / fixups.
-   d. On failure, fall back to IL/JIT path.
-4. If the platform-native flag is not set, proceed with existing R2R load logic (PE assembly lookup and load).
+ランタイムは、アセンブリの読み込み時にプラットフォームネイティブ R2R イメージを処理するように更新されます。
 
-### Host callback
+1. IL アセンブリを読み込み、R2R アセンブリかどうかを判定する。
+2. コンポーネント R2R アセンブリでない場合、既存の R2R ロードロジックで処理を続ける。
+   - このシナリオではプラットフォームネイティブサポートは提供されない。
+3. 新しい `READYTORUN_FLAG_PLATFORM_NATIVE_IMAGE` フラグが設定されたコンポーネント R2R アセンブリの場合：
+   a. `OwnerCompositeExecutable` の値を読み取る。
+   b. コンポーネントアセンブリのパスとオーナーコンポジット名を使用してホストコールバックを呼び出す。
+   c. 成功した場合、コンポジットの `READYTORUN_HEADER` へのポインタを取得し、ネイティブメソッドのルックアップ / フィックスアップに使用する。
+   d. 失敗した場合、IL/JIT パスにフォールバックする。
+4. プラットフォームネイティブフラグが設定されていない場合、既存の R2R ロードロジック（PE アセンブリの検索と読み込み）で処理を続ける。
 
-The [`host_runtime_contract`](https://github.com/dotnet/runtime/blob/main/src/native/corehost/host_runtime_contract.h) will be updated with a new callback for getting native code information.
+### ホストコールバック
+
+[`host_runtime_contract`](https://github.com/dotnet/runtime/blob/main/src/native/corehost/host_runtime_contract.h) に、ネイティブコード情報を取得するための新しいコールバックが追加されます。
 
 ```c
 struct native_code_context
 {
-    size_t size;                       // size of this struct
-    const char* assembly_path;         // component assembly path
-    const char* owner_composite_name;  // name from component R2R header
+    size_t size;                       // この構造体のサイズ
+    const char* assembly_path;         // コンポーネントアセンブリのパス
+    const char* owner_composite_name;  // コンポーネント R2R ヘッダーからの名前
 };
 
 struct native_code_data
 {
-   size_t size;           // size of this struct
-   void* r2r_header_ptr;  // ReadyToRun header
-   size_t image_size;     // size of the image
-   void* image_base;      // base address where the image was loaded
+   size_t size;           // この構造体のサイズ
+   void* r2r_header_ptr;  // ReadyToRun ヘッダー
+   size_t image_size;     // イメージのサイズ
+   void* image_base;      // イメージが読み込まれたベースアドレス
 };
 
 bool get_native_code_data(
@@ -100,4 +112,4 @@ bool get_native_code_data(
 );
 ```
 
-This leaves it to the host to do the actual load (for example, `dlopen` of a shared library, using something statically linked into the host itself) of the platform-native image. It is also responsible for any caching desired.
+プラットフォームネイティブイメージの実際の読み込み（たとえば共有ライブラリの `dlopen`、ホスト自体に静的リンクされたものの使用など）はホストに委ねられます。また、必要なキャッシュ処理もホストが担当します。

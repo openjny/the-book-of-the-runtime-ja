@@ -1,145 +1,160 @@
-# Runtime logging for developers
+# ランタイム開発者のためのロギング
 
 ::: info 原文
 この章の原文は [Runtime logging for developers](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/logging.md) です。
 :::
 
-Date: Feb. 2024
+日付: 2024年2月
 
-The .NET runtime codebase is massive, spread across thousands of files in multiple languages. There are thousands of log messages spread throughout that codebase, and most of them are disabled by default. So how do you, a runtime developer beset by all manner of mysterious test failures, get those messages out of the runtime and into your console or log files? And how should you go about adding log messages appropriately to new code you're writing?
+.NET ランタイムのコードベースは非常に巨大で、複数の言語にまたがる数千ものファイルに広がっています。そのコードベース全体には数千ものログメッセージが散在しており、そのほとんどはデフォルトで無効になっています。では、あらゆる不可解なテスト失敗に悩まされるランタイム開発者であるあなたは、どうすればそれらのメッセージをランタイムから取り出してコンソールやログファイルに出力できるのでしょうか？そして、新たに書いているコードに適切にログメッセージを追加するにはどうすればよいのでしょうか？
 
-*NOTE: This document will repeatedly reference many environment variables. For a detailed list of environment variables supported by the runtime and explanations of what they do, consult [`clrconfigvalues.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/clrconfigvalues.h), [`gcconfig.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/gc/gcconfig.h), and [`jitconfigvalues.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/jit/jitconfigvalues.h).*
+_注意: この文書では多くの環境変数を繰り返し参照します。ランタイムがサポートする環境変数の詳細なリストとその役割については、[`clrconfigvalues.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/clrconfigvalues.h)、[`gcconfig.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/gc/gcconfig.h)、および [`jitconfigvalues.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/jit/jitconfigvalues.h) を参照してください。_
 
-Types of logging
-================
+# ロギングの種類
 
-EventPipe
------------------------
-EventPipe is a cross-platform tracing system similar to ETW that is used widely in the .NET runtime.
-For a detailed overview of EventPipe, see [the EventPipe documentation pages on .NET Learn](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/eventpipe). It offers excellent performance along with lots of flexibility, so it is one of the main ways to get information from an active runtime that we advertise. Most events that we support in debug builds also are exposed in release builds.
+## EventPipe
 
-For basic scenarios, you can use the [`dotnet-counters`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters) tool to monitor events and performance counters the runtime reports through EventPipe. For example, to collect the default counters from a project while running it, you could use `dotnet-counters collect -- dotnet exec myapp.dll`, where the part after `--` specifies a command to trace.
+EventPipe は、.NET ランタイムで広く使用されている、ETW に類似したクロスプラットフォームのトレーシング (tracing) システムです。EventPipe の詳細な概要については、[.NET Learn の EventPipe ドキュメントページ](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/eventpipe)を参照してください。EventPipe は優れたパフォーマンスと高い柔軟性を備えているため、アクティブなランタイムから情報を取得する主要な方法の一つとして推奨されています。デバッグビルドでサポートされているほとんどのイベントは、リリースビルドでも公開されています。
 
-You can also use the [`dotnet-trace`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace) tool to capture EventPipe events from the runtime on the fly. It provides command line options you can use to filter events by severity level or based on keywords. For example, to capture informational GC events from a project while running it, you could use `dotnet-trace collect --clreventlevel informational --clrevents gc -- dotnet exec myapp.dll`, where the part after `--` specifies a command to trace. The `collect` command also supports a set of convenient default profiles, accessible via the `--profile` switch, i.e. `--profile gc-collect`:
+::: tip 💡 初心者向け補足
+EventPipe は、.NET アプリケーションの実行中に内部で何が起きているかを観察するための仕組みです。Java でいえば JFR (Java Flight Recorder) に近い概念です。アプリケーションのパフォーマンス問題やバグの原因を調査する際に、ランタイムが発行するイベント（ガベージコレクションの発生、JIT コンパイルの実行など）をキャプチャして分析できます。ETW (Event Tracing for Windows) は Windows 固有の仕組みですが、EventPipe はクロスプラットフォームで同様の機能を提供します。
+:::
+
+基本的なシナリオでは、[`dotnet-counters`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters) ツールを使用して、ランタイムが EventPipe を通じて報告するイベントやパフォーマンスカウンター (performance counters) を監視できます。たとえば、プロジェクトの実行中にデフォルトのカウンターを収集するには、`dotnet-counters collect -- dotnet exec myapp.dll` を使用します。`--` の後の部分はトレース対象のコマンドを指定します。
+
+[`dotnet-trace`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace) ツールを使用して、実行中のランタイムから EventPipe イベントをリアルタイムでキャプチャすることもできます。このツールには、重大度レベルやキーワードに基づいてイベントをフィルタリングするコマンドラインオプションが用意されています。たとえば、プロジェクトの実行中に情報レベルの GC イベントをキャプチャするには、`dotnet-trace collect --clreventlevel informational --clrevents gc -- dotnet exec myapp.dll` を使用します。`--` の後の部分はトレース対象のコマンドを指定します。`collect` コマンドは、`--profile` スイッチを介してアクセスできる便利なデフォルトプロファイル (profile) のセットもサポートしています。例: `--profile gc-collect`:
+
 ```
-cpu-sampling     - Useful for tracking CPU usage and general .NET runtime information. This is the default option if no profile or providers are specified.
-gc-verbose       - Tracks GC collections and samples object allocations.
-gc-collect       - Tracks GC collections only at very low overhead.
-database         - Captures ADO.NET and Entity Framework database commands
+cpu-sampling     - CPU 使用率と一般的な .NET ランタイム情報の追跡に役立ちます。プロファイルやプロバイダーが指定されていない場合のデフォルトオプションです。
+gc-verbose       - GC コレクションを追跡し、オブジェクトアロケーションをサンプリングします。
+gc-collect       - 非常に低いオーバーヘッドで GC コレクションのみを追跡します。
+database         - ADO.NET と Entity Framework のデータベースコマンドをキャプチャします。
 ```
 
-The `dotnet-trace collect` command will produce a `.nettrace` file, which you can analyze via `dotnet-trace report topN` (for CPU sampling information) or `dotnet-trace convert`. You can also open this `.nettrace` file directly in Visual Studio to inspect it, for example by double-clicking it in solution explorer or dragging it into the Visual Studio window.
+`dotnet-trace collect` コマンドは `.nettrace` ファイルを生成します。これは `dotnet-trace report topN`（CPU サンプリング情報の場合）や `dotnet-trace convert` で分析できます。また、この `.nettrace` ファイルを Visual Studio で直接開いて調査することもできます。たとえば、ソリューションエクスプローラーでダブルクリックするか、Visual Studio のウィンドウにドラッグします。
 
-If your application fails to run under `dotnet-counters` or `dotnet-trace`'s monitoring, try passing the `--show-child-io` tool argument to make the child process's output visible so you can spot any error messages. Make sure you're running it from the right working directory with any necessary environment variables.
+アプリケーションが `dotnet-counters` または `dotnet-trace` の監視下で実行できない場合は、`--show-child-io` ツール引数を渡して子プロセスの出力を可視化し、エラーメッセージを確認してみてください。正しい作業ディレクトリから、必要な環境変数を設定した状態で実行していることを確認してください。
 
-Please see the linked documentation pages for more information on how to use each of the above tools. They have an extensive set of options and some helpful features like time limits, attaching to existing processes, and configurable output formatting.
+上記の各ツールの使い方の詳細については、リンク先のドキュメントページを参照してください。これらのツールには、時間制限、既存のプロセスへのアタッチ、設定可能な出力フォーマットなど、豊富なオプションと便利な機能があります。
 
-To emit your very own EventPipe events from within the C++ part of the runtime, you can use the `FireEtwXXX` APIs, or their convenience wrappers within the `ETW::` C++ namespace. You likely will want to create new type(s) of events instead of using existing ones. The events are generated by the [`genEventing.py`](https://github.com/dotnet/runtime/blob/main/src/coreclr/scripts/genEventing.py) script based on the definitions in [`ClrEtwAll.man`](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/ClrEtwAll.man).
+ランタイムの C++ 部分から独自の EventPipe イベントを発行するには、`FireEtwXXX` API、またはその便利なラッパーである `ETW::` C++ 名前空間内のものを使用できます。既存のイベントを使用するのではなく、新しい種類のイベントを作成することが多いでしょう。イベントは [`genEventing.py`](https://github.com/dotnet/runtime/blob/main/src/coreclr/scripts/genEventing.py) スクリプトによって、[`ClrEtwAll.man`](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/ClrEtwAll.man) の定義に基づいて生成されます。
 
-To emit EventPipe events from C# you can use the [`System.Diagnostics.Tracing.EventSource`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/eventsource-getting-started) class, by defining your own event types derived from it. See its documentation for examples and more details.
+C# から EventPipe イベントを発行するには、[`System.Diagnostics.Tracing.EventSource`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/eventsource-getting-started) クラスを使用できます。このクラスから派生した独自のイベント型を定義します。サンプルと詳細についてはそのドキュメントを参照してください。
 
-Alternative event consumers
------------------------
+## 代替イベントコンシューマー
 
-For advanced scenarios, EventSource and the C++ event wrappers both support standard event tracing systems on their respective platforms (ETW on Windows, LTTNG on Linux). EventPipe itself does not integrate with these systems, but the runtime's layers on top of EventPipe will also use them if they are enabled.
+高度なシナリオでは、EventSource と C++ イベントラッパーの両方が、それぞれのプラットフォーム上の標準的なイベントトレーシングシステム（Windows では ETW、Linux では LTTNG）をサポートしています。EventPipe 自体はこれらのシステムと統合されませんが、EventPipe の上に構築されたランタイムのレイヤーは、それらが有効になっている場合にそれらも使用します。
 
-On Windows you can use standard [ETW](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/event-tracing-for-windows) tools like [WPR](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/windows-performance-recorder) with its '.NET Activity' scenario. A convenient all-purpose tool for collecting and analyzing ETW traces on Windows is [PerfView](https://github.com/microsoft/perfview). To use PerfView you'll want to consult its [extensive documentation](http://htmlpreview.github.io/?https://github.com/Microsoft/perfview/blob/main/src/PerfView/SupportFiles/UsersGuide.htm) or go through the tutorial, but a basic starting point is to launch your application via the *Collect*->*Run* menu option, and then double-click the resulting recording in the explorer pane to the left in order to open it.
+::: tip 💡 初心者向け補足
+ETW (Event Tracing for Windows) は Windows に組み込まれた高性能なトレーシング機構で、LTTNG (Linux Trace Toolkit Next Generation) は Linux 向けの同等のツールです。EventPipe はこれらとは独立したクロスプラットフォームの仕組みですが、ランタイムはこれらのネイティブなトレーシングシステムとも連携できるように設計されています。たとえば、Windows で ETW を使い慣れているチームは、既存のワークフローをそのまま .NET の診断にも活用できます。
+:::
 
-On Linux you can use [LTTNG](https://lttng.org/), and the [perfcollect script](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/trace-perfcollect-lttng) is a useful tool you can use for a more ETW-like experience.
+Windows では、標準的な [ETW](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/event-tracing-for-windows) ツール、たとえば [WPR](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/windows-performance-recorder) の「.NET Activity」シナリオを使用できます。Windows で ETW トレースを収集・分析するための便利な汎用ツールとして [PerfView](https://github.com/microsoft/perfview) があります。PerfView を使用するには、その[詳細なドキュメント](http://htmlpreview.github.io/?https://github.com/Microsoft/perfview/blob/main/src/PerfView/SupportFiles/UsersGuide.htm)を参照するかチュートリアルを実施するのがよいでしょう。基本的な出発点としては、*Collect*→*Run* メニューオプションからアプリケーションを起動し、生成された記録を左側のエクスプローラーペインでダブルクリックして開きます。
 
-StressLog
-------------
-The StressLog is a circular buffer inside the runtime process that usually does not escape, and most StressLog messages are available in retail builds, which makes it useful for troubleshooting issues with GC or other subsystems in production scenarios. To enable it, you can set the `DOTNET_StressLog` environment variable to `1`, and you can configure it using environment variables, as demonstrated below:
+Linux では [LTTNG](https://lttng.org/) を使用でき、[perfcollect スクリプト](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/trace-perfcollect-lttng)は ETW に近い操作感を提供する便利なツールです。
+
+## StressLog
+
+StressLog は、ランタイムプロセス内部の循環バッファー (circular buffer) であり、通常はプロセス外部に出力されません。ほとんどの StressLog メッセージはリテールビルド (retail build) でも利用可能であるため、本番環境での GC やその他のサブシステムに関する問題のトラブルシューティングに役立ちます。StressLog を有効にするには、環境変数 `DOTNET_StressLog` を `1` に設定し、以下に示すように環境変数を使用して設定できます:
+
+::: tip 💡 初心者向け補足
+StressLog は、ランタイム内部のデバッグに特化した軽量なログ機構です。通常のログとは異なり、メモリ上の循環バッファーに書き込まれるため、ファイル I/O のオーバーヘッドがなく、パフォーマンスへの影響が最小限に抑えられます。「循環バッファー」とは、古いメッセージが新しいメッセージで上書きされる固定サイズのバッファーのことです。本番環境でも使用できるため、デバッガーをアタッチできない状況やダンプファイルを取得できない場合に特に有用です。
+:::
 
 ```bash
-echo Enable StressLog
+echo StressLog を有効にする
 set DOTNET_StressLog=1
 
-echo Show JIT log messages
+echo JIT のログメッセージを表示する
 set DOTNET_LogFacility=0x00000008
 
-echo Only show warnings or errors
+echo 警告またはエラーのみ表示する
 set DOTNET_LogLevel=3
 
-echo If the buffer is filling too quickly, it can be helpful to set large buffer sizes.
-echo But if you have many threads, you may want to set a low limit to avoid exhausting memory.
-echo Set a per-thread size limit for StressLog of 20MB. Config settings default to hex.
+echo バッファーが急速に埋まる場合、大きなバッファーサイズを設定すると効果的です。
+echo ただし、スレッド数が多い場合は、メモリ枯渇を避けるために低い制限を設定するとよいでしょう。
+echo StressLog のスレッドごとのサイズ制限を 20MB に設定する。設定値はデフォルトで16進数です。
 set DOTNET_StressLogSize=1400000
 
-echo Set a process-wide size limit for all StressLogs (combined) of 400MB. Config settings default to hex.
+echo すべての StressLog（合計）のプロセス全体のサイズ制限を 400MB に設定する。設定値はデフォルトで16進数です。
 set DOTNET_TotalStressLogSize=18000000
 
-echo Write the StressLog's to a file instead of memory for cases where you can't attach a debugger or get a dump file.
+echo デバッガーをアタッチできない場合やダンプファイルを取得できない場合のために、StressLog をメモリではなくファイルに書き込む。
 set DOTNET_StressLogFilename=mystresslog.log
 ```
 
-To write your own messages to the StressLog from C++, you can use the `STRESS_LOGN(facility, level, msg, ...)` macros, i.e. `STRESS_LOG1(LF_GC, LL_ERROR, "A significant but non-fatal error occurred in the garbage collector! Here's my favorite number: %d\n", 42)` where the first argument is one or more logging facilities (you can combine them using `|` i.e. `LF_GC | LF_GCROOTS`), the second argument is a severity level, and the third argument is the log message format string. See [log facilities and levels](#log-facilities-and-levels), below, for more information.
+C++ から StressLog に独自のメッセージを書き込むには、`STRESS_LOGN(facility, level, msg, ...)` マクロを使用できます。例: `STRESS_LOG1(LF_GC, LL_ERROR, "A significant but non-fatal error occurred in the garbage collector! Here's my favorite number: %d\n", 42)`。最初の引数は 1 つ以上のロギングファシリティ (logging facility)（`|` を使って組み合わせ可能、例: `LF_GC | LF_GCROOTS`）、2 番目の引数は重大度レベル (severity level)、3 番目の引数はログメッセージのフォーマット文字列です。詳細については、後述の[ログファシリティとレベル](#ログファシリティとレベル)を参照してください。
 
-You can't write your own messages to the StressLog from C#. If for some reason you need to while testing, perhaps you could expose it via a custom qcall.
+C# から StressLog に独自のメッセージを書き込むことはできません。テスト中にどうしても必要な場合は、カスタム QCall を通じて公開することが考えられます。
 
-Traditional .NET Runtime Logging
---------------------------------
-"Traditional" log messages are only available in debug or checked builds of the runtime. To enable them, you can set the `DOTNET_LogEnable` environment variable to `1`, and configure them using environment variables. There are various configuration variables for traditional logging, demonstrated below:
+## 従来の .NET ランタイムロギング
+
+「従来の」ログメッセージは、ランタイムのデバッグビルド (debug build) またはチェック済みビルド (checked build) でのみ利用可能です。これを有効にするには、環境変数 `DOTNET_LogEnable` を `1` に設定し、環境変数を使用して設定します。従来のロギングにはさまざまな設定変数があり、以下に示します:
 
 ```bash
-echo Enable traditional logging
+echo 従来のロギングを有効にする
 set DOTNET_LogEnable=1
 
-echo Show JIT log messages
+echo JIT のログメッセージを表示する
 set DOTNET_LogFacility=0x00000008
 
-echo Only show warnings or errors
+echo 警告またはエラーのみ表示する
 set DOTNET_LogLevel=3
 
-echo Log messages to the debugger
+echo デバッガーにログメッセージを出力する
 set DOTNET_LogToDebugger=0
 
-echo Log messages to the console
+echo コンソールにログメッセージを出力する
 set DOTNET_LogToConsole=1
 
-echo Log messages to a specific file
+echo 特定のファイルにログメッセージを出力する
 set DOTNET_LogToFile=0
 set DOTNET_LogFile=mylog.log
 
-echo Append log messages to the file instead of erasing it at start
+echo 起動時にファイルを消去する代わりに、ログメッセージをファイルに追記する
 set DOTNET_LogFileAppend=1
 
-echo Flush the log file after every write to ensure messages are not lost after a crash
+echo クラッシュ後にメッセージが失われないように、書き込みごとにログファイルをフラッシュする
 set DOTNET_LogFlushFile=1
 
-echo Attach the process ID to every log message for multi-process scenarios
+echo マルチプロセスシナリオのために、すべてのログメッセージにプロセス ID を付加する
 set DOTNET_LogWithPid=1
 ```
 
-This classical logging system is not frequently used, so individual log messages you encounter may be partially or completely nonfunctional - for example, 64-bit-only issues in outdated log statements - but the basics should always work.
+この古典的なロギングシステムはあまり頻繁に使用されていないため、遭遇する個々のログメッセージは部分的または完全に機能しない場合があります（たとえば、古いログ文における 64 ビット専用の問題など）。ただし、基本的な機能は常に動作するはずです。
 
-To send your own traditional log messages from C++, you can use the `LOG((facility, level, msg, ...))` macro, i.e. `LOG((LF_GC, LL_INFO10000, "An insignificant thing happened in the garbage collector.\n"))`. The arguments are roughly equivalent to those described above for StressLog. See [log facilities and levels](#log-facilities-and-levels), below, for more information on facilities and levels.
+C++ から独自の従来のログメッセージを送信するには、`LOG((facility, level, msg, ...))` マクロを使用できます。例: `LOG((LF_GC, LL_INFO10000, "An insignificant thing happened in the garbage collector.\n"))`。引数は上記の StressLog で説明したものとほぼ同等です。ファシリティとレベルの詳細については、後述の[ログファシリティとレベル](#ログファシリティとレベル)を参照してください。
 
-Note that the `LOG` and `STRESS_LOG` macros are very similar, so for debugging purposes you can temporarily convert a `LOG((...))` statement into a `STRESS_LOG(...)` statement in order to take advantage of StressLog functionality to diagnose an issue.
+`LOG` マクロと `STRESS_LOG` マクロは非常に似ていることに注意してください。そのため、デバッグ目的で一時的に `LOG((...))` 文を `STRESS_LOG(...)` 文に変換して、StressLog の機能を活用して問題を診断することができます。
 
-If you need to send messages to the traditional log from C#, similar to StressLog you could expose it via a custom qcall temporarily.
+C# から従来のログにメッセージを送信する必要がある場合は、StressLog と同様に、一時的にカスタム QCall を通じて公開することが考えられます。
 
-Log Facilities and Levels
--------------------------
-StressLog and traditional logging both rely on the `DOTNET_LogFacility`, `DOTNET_LogFacility2`, and `DOTNET_LogLevel` environment variables to control their level of verbosity and filter the information logged.
+## ログファシリティとレベル
 
-`DOTNET_LogLevel` allows filtering out log messages of lower importance, regardless of category. This variable is specified as an integer, not a named constant. The levels as of this writing are listed below, and come from [`log.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/log.h):
+StressLog と従来のロギングはいずれも、環境変数 `DOTNET_LogFacility`、`DOTNET_LogFacility2`、および `DOTNET_LogLevel` に依存して、冗長度の制御とログに記録される情報のフィルタリングを行います。
+
+`DOTNET_LogLevel` は、カテゴリに関係なく、重要度の低いログメッセージをフィルタリングできます。この変数は名前付き定数ではなく、整数で指定します。この文書の執筆時点でのレベルは以下のとおりで、[`log.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/log.h) から取得されています:
 
 ```c
 LL_EVERYTHING  10
-LL_INFO1000000  9 // can be expected to generate 1,000,000 logs per small but not trivial run
-LL_INFO100000   8 // can be expected to generate 100,000 logs per small but not trivial run
-LL_INFO10000    7 // can be expected to generate 10,000 logs per small but not trivial run
-LL_INFO1000     6 // can be expected to generate 1,000 logs per small but not trivial run
-LL_INFO100      5 // can be expected to generate 100 logs per small but not trivial run
-LL_INFO10       4 // can be expected to generate 10 logs per small but not trivial run
+LL_INFO1000000  9 // 小規模だが自明でない実行で 1,000,000 件のログが生成される見込み
+LL_INFO100000   8 // 小規模だが自明でない実行で 100,000 件のログが生成される見込み
+LL_INFO10000    7 // 小規模だが自明でない実行で 10,000 件のログが生成される見込み
+LL_INFO1000     6 // 小規模だが自明でない実行で 1,000 件のログが生成される見込み
+LL_INFO100      5 // 小規模だが自明でない実行で 100 件のログが生成される見込み
+LL_INFO10       4 // 小規模だが自明でない実行で 10 件のログが生成される見込み
 LL_WARNING      3
 LL_ERROR        2
 LL_FATALERROR   1
-LL_ALWAYS       0 // impossible to turn off (log level never negative)
+LL_ALWAYS       0 // オフにすることは不可能（ログレベルは負にならない）
 ```
 
-`DOTNET_LogFacility` and `DOTNET_LogFacility2` allow filtering messages to specific categories. These variables are specified as integers, not named constants. For example, the `LF_GC` facility's value is `0x00000001` or just `1`. The list of available options for `DOTNET_LogFacility1` as of this writing are listed below, and come from [`loglf.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/loglf.h):
+::: tip 💡 初心者向け補足
+ログレベル (log level) とログファシリティ (log facility) は、ログ出力を制御するための 2 つの軸です。ログレベルはメッセージの重要度（エラー、警告、情報など）によるフィルタリングで、Java の `java.util.logging.Level` や SLF4J のログレベルに相当します。ログファシリティはメッセージのカテゴリ（GC、JIT、ローダーなど）によるフィルタリングで、ランタイムのどのサブシステムからのメッセージを見たいかを選択できます。両方を組み合わせることで、必要な情報だけを効率的に絞り込めます。
+:::
+
+`DOTNET_LogFacility` と `DOTNET_LogFacility2` は、特定のカテゴリにメッセージをフィルタリングできます。これらの変数は名前付き定数ではなく、整数で指定します。たとえば、`LF_GC` ファシリティの値は `0x00000001`、つまり `1` です。この文書の執筆時点での `DOTNET_LogFacility` に利用可能なオプションは以下のとおりで、[`loglf.h`](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/loglf.h) から取得されています:
+
 ```c
 LF_GC                0x00000001
 LF_GCINFO            0x00000002
@@ -163,9 +178,9 @@ LF_THREADPOOL        0x00040000
 LF_GCROOTS           0x00080000
 LF_INTEROP           0x00100000
 LF_MARSHALER         0x00200000
-LF_TIEREDCOMPILATION 0x00400000 // This used to be IJW, but now repurposed for tiered compilation
+LF_TIEREDCOMPILATION 0x00400000 // 以前は IJW でしたが、現在は階層型コンパイル (tiered compilation) 用に転用されています
 LF_ZAP               0x00800000
-LF_STARTUP           0x01000000 // Log startup and shutdown failures
+LF_STARTUP           0x01000000 // 起動とシャットダウンの失敗をログに記録
 LF_APPDOMAIN         0x02000000
 LF_CODESHARING       0x04000000
 LF_STORE             0x08000000
@@ -174,21 +189,22 @@ LF_LOCKS             0x20000000
 LF_BCL               0x40000000
 ```
 
-`DOTNET_LogFacility2` is newer, and at present only has one facility available: `LF2_MULTICOREJIT`, with a value of `0x00000001`.
+`DOTNET_LogFacility2` はより新しく、現時点では `LF2_MULTICOREJIT`（値は `0x00000001`）というファシリティが 1 つだけ利用可能です。
 
-If you're trying to capture a specific message in the log and it's not showing up, make sure you've checked its log level/facility and set your environment variables accordingly!
+ログ内の特定のメッセージをキャプチャしようとしているのに表示されない場合は、そのログレベル/ファシリティを確認し、環境変数を適切に設定しているか確認してください！
 
-Mono logging
-------------
-Builds of .NET using the Mono runtime have their own Mono-specific log configuration environment variables that control what diagnostic information is logged by the runtime.
+## Mono ロギング
 
-You can use `MONO_LOG_LEVEL` to configure the overall verbosity by setting it to one of `"error"`, `"critical"`, `"warning"`, `"message"`, `"info"`, or `"debug"`. You can use `MONO_LOG_MASK` to filter the log messages down to specific categories like `gc` or `aot`. For a full list of mask options, see [`mono-logger.c`](https://github.com/dotnet/runtime/blob/main/src/mono/mono/utils/mono-logger.c)'s `mono_trace_set_mask_string` function.
+Mono ランタイムを使用した .NET のビルドには、ランタイムが出力する診断情報を制御する Mono 固有のログ設定環境変数があります。
 
-When dealing with Mono's interpreter, the `MONO_VERBOSE_METHOD` environment variable turns on verbose logging for methods with a specific name. This can be very helpful if you are investigating situations where a method is being compiled or optimized incorrectly, or you're not certain which version of a method is running.
+`MONO_LOG_LEVEL` を使用して、`"error"`、`"critical"`、`"warning"`、`"message"`、`"info"`、`"debug"` のいずれかに設定することで、全体的な冗長度を設定できます。`MONO_LOG_MASK` を使用して、`gc` や `aot` などの特定のカテゴリにログメッセージをフィルタリングできます。マスクオプションの完全なリストについては、[`mono-logger.c`](https://github.com/dotnet/runtime/blob/main/src/mono/mono/utils/mono-logger.c) の `mono_trace_set_mask_string` 関数を参照してください。
 
-WebAssembly logging
--------------------
-To configure Mono logging in WebAssembly builds of the runtime, you will need to specify your environment variable(s) in the form of a JSON blob inside of a config item inside your csproj, like so:
+Mono のインタプリター (interpreter) を扱う場合、環境変数 `MONO_VERBOSE_METHOD` は特定の名前を持つメソッドの詳細ログを有効にします。これは、メソッドが正しくコンパイルまたは最適化されていない状況を調査している場合や、どのバージョンのメソッドが実行されているか確信が持てない場合に非常に役立ちます。
+
+## WebAssembly ロギング
+
+WebAssembly ビルドのランタイムで Mono ロギングを設定するには、csproj 内の設定項目に JSON ブロブの形式で環境変数を指定する必要があります。以下のようにします:
+
 ```xml
 <ItemGroup>
   <WasmExtraConfig Include="environmentVariables" Value='
@@ -198,21 +214,23 @@ To configure Mono logging in WebAssembly builds of the runtime, you will need to
 }' />
 </ItemGroup>
 ```
-Environment variables set externally at build time or at web browser launch time will not automatically flow through into the WASM runtime.
 
-For WebAssembly builds of the runtime there is an additional interop layer written in TypeScript that has its own logging facilities, defined in [`logging.ts`](https://github.com/dotnet/runtime/blob/main/src/mono/browser/runtime/logging.ts).
+ビルド時やウェブブラウザーの起動時に外部で設定された環境変数は、自動的に WASM ランタイムに引き継がれません。
 
-For debug-severity log messages from the TypeScript layer, they will be suppressed by default unless the `diagnosticTracing` flag is set. To set it, call `.withDiagnosticTracing(true)` on the `dotnet` object during startup, or add an extra config item to your csproj like so:
+WebAssembly ビルドのランタイムには、TypeScript で書かれた追加のインターオプレイヤー (interop layer) があり、独自のロギング機能を持っています。これは [`logging.ts`](https://github.com/dotnet/runtime/blob/main/src/mono/browser/runtime/logging.ts) で定義されています。
+
+TypeScript レイヤーからのデバッグレベルのログメッセージは、`diagnosticTracing` フラグが設定されていない限り、デフォルトで抑制されます。設定するには、起動時に `dotnet` オブジェクトで `.withDiagnosticTracing(true)` を呼び出すか、csproj に以下のような追加の設定項目を記述します:
+
 ```xml
 <ItemGroup>
   <WasmExtraConfig Include="diagnosticTracing" Value="true" />
 </ItemGroup>
 ```
 
-All other log severities are enabled by default, and they will be written to the developer tools console when running in a web browser. When running automated tests from the command line or running an application in an environment like node.js or the v8 shell, they will be written to standard output and/or standard error.
+その他のすべてのログ重大度はデフォルトで有効であり、ウェブブラウザーで実行している場合は開発者ツールコンソールに書き込まれます。コマンドラインから自動テストを実行している場合や、node.js や v8 シェルなどの環境でアプリケーションを実行している場合は、標準出力および/または標準エラーに書き込まれます。
 
-To send messages from within TypeScript, use the appropriate API - `mono_log_error` for severe errors, `mono_log_info` for important information, and `mono_log_debug` for things that ordinary users will never need to see.
+TypeScript 内からメッセージを送信するには、適切な API を使用してください。重大なエラーには `mono_log_error`、重要な情報には `mono_log_info`、一般ユーザーが見る必要のないものには `mono_log_debug` を使用します。
 
-If for some reason you need to access this logging facility directly from C/C++, you can use the `mono_wasm_trace_logger` function. Note that fatal errors sent through this function will trigger an immediate process exit after they are written.
+何らかの理由でこのロギング機能に C/C++ から直接アクセスする必要がある場合は、`mono_wasm_trace_logger` 関数を使用できます。この関数を通じて送信された致命的エラーは、書き込み後に即座にプロセスの終了をトリガーすることに注意してください。
 
-By default the jiterpreter will only log error messages to the console, but if `MONO_VERBOSE_METHOD` is used, it will also log verbose information on traces within verbose methods. More advanced logging in the jiterpreter requires editing the configuration variables in [`jiterpreter.ts`](https://github.com/dotnet/runtime/blob/main/src/mono/browser/runtime/jiterpreter.ts) and compiling the runtime from source.
+デフォルトでは jiterpreter はエラーメッセージのみをコンソールに出力しますが、`MONO_VERBOSE_METHOD` が使用されている場合は、verbose メソッド内のトレースに関する詳細情報もログに記録します。jiterpreter でのより高度なロギングには、[`jiterpreter.ts`](https://github.com/dotnet/runtime/blob/main/src/mono/browser/runtime/jiterpreter.ts) の設定変数を編集し、ランタイムをソースからコンパイルする必要があります。

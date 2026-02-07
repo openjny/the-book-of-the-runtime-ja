@@ -1,58 +1,68 @@
-# Shared Generics Design
+# 共有ジェネリクスの設計
 
 ::: info 原文
 この章の原文は [Shared Generics Design](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/shared-generics.md) です。
 :::
 
-Author: Fadi Hanna - 2019
+著者: Fadi Hanna - 2019
 
-# Introduction
+# はじめに
 
-Shared generics is a runtime+JIT feature aimed at reducing the amount of code the runtime generates for generic methods of various instantiations (supports methods on generic types and generic methods). The idea is that for certain instantiations, the generated code will almost be identical with the exception of a few instructions, so in order to reduce the memory footprint, and the amount of time we spend jitting these generic methods, the runtime will generate a single special canonical version of the code, which can be used by all compatible instantiations of the method.
+共有ジェネリクス (Shared Generics) は、さまざまなインスタンス化 (instantiation) を持つジェネリックメソッド (generic method) に対してランタイムが生成するコード量を削減することを目的とした、ランタイムと JIT の連携機能です（ジェネリック型のメソッドとジェネリックメソッドの両方をサポートします）。この機能の基本的な考え方は、特定のインスタンス化においては、生成されるコードがごくわずかな命令を除いてほぼ同一になるため、メモリフットプリントの削減とジェネリックメソッドの JIT コンパイルにかかる時間を短縮するために、ランタイムが単一の特別な正規バージョン (canonical version) のコードを生成し、そのメソッドの互換性のあるすべてのインスタンス化で共用できるようにする、というものです。
 
-### Canonical Codegen and Generic Dictionaries
+::: tip 💡 初心者向け補足
+ジェネリクスとは、`List<T>` のように型パラメータを使ってさまざまな型に対応できる仕組みです（Java のジェネリクスに似ています）。たとえば `List<string>` と `List<object>` はどちらも `List<T>` のインスタンス化ですが、参照型同士であればメモリレイアウトが同じなので、同じ機械語コードを使い回すことができます。これが「共有ジェネリクス」の核心です。
+:::
 
-Consider the following C# code sample:
+### 正規コード生成とジェネリックディクショナリ
 
-``` c#
+以下の C# コードサンプルを考えてみましょう:
+
+```c#
 string Method<T>()
 {
     return typeof(List<T>).ToString();
 }
 ```
 
-Without shared generics, the code for instantiations like `Method<object>` or `Method<string>` would look identical except for one single instruction: the one that loads the correct TypeHandle of type `List<T>`:
-``` asm
+共有ジェネリクスがない場合、`Method<object>` や `Method<string>` のようなインスタンス化のコードは、1 つの命令を除いて同一になります。その命令とは、`List<T>` 型の正しいタイプハンドル (TypeHandle) をロードするものです:
+
+```asm
     mov rcx, type handle of List<string> or List<object>
     call ToString()
     ret
 ```
 
-With shared generics, the canonical code will not have any hard-coded versions of the type handle of `List<T>`, but instead looks up the exact type handle either through a call to a runtime helper API, or by loading it up from the *generic dictionary* of the instantiation of `Method<T>` that is executing. The code would look more like the following:
-``` asm
-    mov rcx, generic context                                                // MethodDesc of Method<string> or Method<object>
-    mov rcx, [rcx + offset of InstantiatedMethodDesc::m_pPerInstInfo]       // This is the generic dictionary
+共有ジェネリクスでは、正規コード (canonical code) に `List<T>` のタイプハンドルのハードコードされたバージョンは含まれず、代わりにランタイムヘルパー API の呼び出しか、実行中の `Method<T>` のインスタンス化の*ジェネリックディクショナリ (generic dictionary)* からロードすることで、正確なタイプハンドルを検索します。コードは以下のようになります:
+
+```asm
+    mov rcx, generic context                                                // Method<string> または Method<object> の MethodDesc
+    mov rcx, [rcx + offset of InstantiatedMethodDesc::m_pPerInstInfo]       // これがジェネリックディクショナリ
     mov rcx, [rcx + dictionary slot containing type handle of List<T>]
     call ToString()
     ret
 ```
 
-The generic context in this example is the `InstantiatedMethodDesc` of `Method<object>` or `Method<string>`. The generic dictionary is a data structure used by shared generic code to fetch instantiation-specific information. It is basically an array where the entries are instantiation-specific type handles, method handles, field handles, method entry points, etc... The "PerInstInfo" fields on MethodTable and `InstantiatedMethodDesc` structures point at the generic dictionary structure for a generic type and method respectively.
+この例におけるジェネリックコンテキスト (generic context) は、`Method<object>` または `Method<string>` の `InstantiatedMethodDesc` です。ジェネリックディクショナリ (generic dictionary) とは、共有ジェネリックコードがインスタンス化固有の情報を取得するために使用するデータ構造です。基本的には配列であり、そのエントリにはインスタンス化固有のタイプハンドル (type handle)、メソッドハンドル (method handle)、フィールドハンドル (field handle)、メソッドエントリポイント (method entry point) などが格納されています。MethodTable および `InstantiatedMethodDesc` 構造体の「PerInstInfo」フィールドは、それぞれジェネリック型とジェネリックメソッドのジェネリックディクショナリ構造体を指しています。
 
-In this example, the generic dictionary for `Method<object>` will contain a slot with the type handle for type `List<object>`, and the generic dictionary for `Method<string>` will contain a slot with the type handle for type `List<string>`.
+この例では、`Method<object>` のジェネリックディクショナリには `List<object>` 型のタイプハンドルを持つスロットが含まれ、`Method<string>` のジェネリックディクショナリには `List<string>` 型のタイプハンドルを持つスロットが含まれます。
 
-This feature is currently only supported for instantiations over reference types because they all have the same size/properties/layout/etc... For instantiations over primitive types or value types, the runtime will generate separate code bodies for each instantiation.
+この機能は現在、参照型 (reference type) のインスタンス化でのみサポートされています。参照型はすべて同じサイズ・プロパティ・レイアウトなどを持つためです。プリミティブ型 (primitive type) や値型 (value type) のインスタンス化については、ランタイムがインスタンス化ごとに個別のコード本体を生成します。
 
+::: tip 💡 初心者向け補足
+参照型（`string`、`object`、ユーザー定義のクラスなど）は、すべてポインタとして表現されるため、メモリ上のサイズが同じです。そのため `Method<string>` と `Method<object>` は同じ機械語コードを共有できます。一方、値型（`int`、`double`、ユーザー定義の構造体など）はそれぞれサイズが異なるため、個別にコードを生成する必要があります。Java ではジェネリクスが型消去 (type erasure) によって実装されますが、.NET ではこのように実行時の型情報を保持しつつ、参照型についてはコード共有で効率化しています。
+:::
 
-# Layouts and Algorithms
+# レイアウトとアルゴリズム
 
-### Dictionaries Pointers on Types and Methods
+### 型とメソッドにおけるディクショナリポインタ
 
-The dictionary used by any given generic method is pointed at by the `m_pPerInstInfo` field on the `InstantiatedMethodDesc` structure of that method. It's a direct pointer to the contents of the generic dictionary data.
+特定のジェネリックメソッドが使用するディクショナリは、そのメソッドの `InstantiatedMethodDesc` 構造体の `m_pPerInstInfo` フィールドによってポイントされています。これはジェネリックディクショナリデータの内容への直接ポインタです。
 
-On generic types, there's an extra level of indirection: the `m_pPerInstInfo` field on the `MethodTable` structure is a pointer to a table of dictionaries, and each entry in that table is a pointer to the actual generic dictionary data. This is because types have inheritance, and derived generic types inherit the dictionaries of their base types.
+ジェネリック型では、もう 1 段階の間接参照 (indirection) があります。`MethodTable` 構造体の `m_pPerInstInfo` フィールドは、ディクショナリのテーブルへのポインタであり、そのテーブルの各エントリが実際のジェネリックディクショナリデータへのポインタです。これは、型には継承があり、派生ジェネリック型 (derived generic type) は基底型 (base type) のディクショナリを継承するためです。
 
-Here's an example:
+以下に例を示します:
+
 ```c#
 class BaseClass<T> { }
 
@@ -61,74 +71,80 @@ class DerivedClass<U> : BaseClass<U> { }
 class AnotherDerivedClass : DerivedClass<string> { }
 ```
 
-The MethodTables of each of these types will look like the following:
+これらの各型の MethodTable は以下のようになります:
 
-| **BaseClass[T]'s MethodTable** |
-|--------------------------|
-| ...      |
-| `m_PerInstInfo`: points at dictionary table below     |
-| ...      |
-| `dictionaryTable[0]`: points at dictionary data below      |
-| `BaseClass's dictionary data here`  |
+| **BaseClass[T] の MethodTable**                        |
+| ------------------------------------------------------ |
+| ...                                                    |
+| `m_PerInstInfo`: 以下のディクショナリテーブルを指す    |
+| ...                                                    |
+| `dictionaryTable[0]`: 以下のディクショナリデータを指す |
+| `BaseClass のディクショナリデータ`                     |
 
-| **DerivedClass[U]'s MethodTable ** |
-|--------------------------|
-| ...      |
-| `m_PerInstInfo`: points at dictionary table below     |
-| ...      |
-| `dictionaryTable[0]`: points at dictionary data of `BaseClass`      |
-| `dictionaryTable[1]`: points at dictionary data below      |
-| `DerivedClass's dictionary data here`  |
+| **DerivedClass[U] の MethodTable**                             |
+| -------------------------------------------------------------- |
+| ...                                                            |
+| `m_PerInstInfo`: 以下のディクショナリテーブルを指す            |
+| ...                                                            |
+| `dictionaryTable[0]`: `BaseClass` のディクショナリデータを指す |
+| `dictionaryTable[1]`: 以下のディクショナリデータを指す         |
+| `DerivedClass のディクショナリデータ`                          |
 
-| **AnotherDerivedClass's MethodTable** |
-|--------------------------|
-| ...      |
-| `m_PerInstInfo`: points at dictionary table below     |
-| ...      |
-| `dictionaryTable[0]`: points at dictionary data of `BaseClass`      |
-| `dictionaryTable[1]`: points at dictionary data of `DerivedClass`      |
+| **AnotherDerivedClass の MethodTable**                            |
+| ----------------------------------------------------------------- |
+| ...                                                               |
+| `m_PerInstInfo`: 以下のディクショナリテーブルを指す               |
+| ...                                                               |
+| `dictionaryTable[0]`: `BaseClass` のディクショナリデータを指す    |
+| `dictionaryTable[1]`: `DerivedClass` のディクショナリデータを指す |
 
-Note that `AnotherDerivedClass` doesn't have a dictionary of its own given that it is not a generic type, but inherits the dictionary pointers of its base types.
+`AnotherDerivedClass` はジェネリック型ではないため、独自のディクショナリを持たず、基底型のディクショナリポインタを継承していることに注意してください。
 
-### Dictionary Slots
+### ディクショナリスロット
 
-As described earlier, a generic dictionary is an array of multiple slots containing instantiation-specific information. When a dictionary is initially allocated for a certain generic type or method, all of its slots are initialized to `NULL`, and are lazily populated on demand as code executes (see: `Dictionary::PopulateEntry(...)`).
+前述のとおり、ジェネリックディクショナリはインスタンス化固有の情報を含む複数のスロット (slot) の配列です。あるジェネリック型またはメソッドに対してディクショナリが最初にアロケート (allocate) されると、すべてのスロットは `NULL` で初期化され、コードの実行に応じて遅延的にオンデマンドで設定されます（`Dictionary::PopulateEntry(...)` を参照）。
 
-The first N slots in an instantiation of N arguments are always going to be the type handles of the instantiation type arguments (this is kind of an optimization as well). The slots that follow contain instantiation-based information.
+インスタンス化の最初の N 個のスロット（N は引数の数）には、常にインスタンス化の型引数のタイプハンドルが格納されます（これは一種の最適化でもあります）。それに続くスロットには、インスタンス化に基づく情報が格納されます。
 
-For instance, here is an example of the contents of the generic dictionary for our `Method<string>` example:
+たとえば、先ほどの `Method<string>` の例におけるジェネリックディクショナリの内容は以下のとおりです:
 
-| `Method<string>'s dictionary` |
-|--------------------------|
-| `slot[0]: TypeHandle(string)` |
-| `slot[1]: Total dictionary size` |
-| `slot[2]: TypeHandle(List<string>)` |
-| `slot[3]: NULL (not used)` |
-| `slot[4]: NULL (not used)` |
+| `Method<string> のディクショナリ`     |
+| ------------------------------------- |
+| `slot[0]: TypeHandle(string)`         |
+| `slot[1]: ディクショナリの合計サイズ` |
+| `slot[2]: TypeHandle(List<string>)`   |
+| `slot[3]: NULL (未使用)`              |
+| `slot[4]: NULL (未使用)`              |
 
-*Note: the size slot is never used by generic code, and is part of the dynamic dictionary expansion feature. More on that below.*
+_注: サイズスロットはジェネリックコードによって使用されることはなく、動的ディクショナリ拡張 (dynamic dictionary expansion) 機能の一部です。詳しくは後述します。_
 
-When this dictionary is first allocated, only `slot[0]` is initialized because it contains the instantiation type arguments (and of course the size slot is also initialized with the dictionary expansion feature), but the rest of the slots (for example, `slot[2]`) are `NULL`, and get lazily populated with values if we ever hit a code path that attempts to use them.
+このディクショナリが最初にアロケートされた時点では、`slot[0]` のみが初期化されています。これはインスタンス化の型引数を含んでいるためです（もちろん、動的ディクショナリ拡張機能によりサイズスロットも初期化されます）。残りのスロット（たとえば `slot[2]`）は `NULL` であり、それらを使用するコードパスに到達した場合に遅延的に値が設定されます。
 
-When loading information from a slot that is still `NULL`, the generic code will call one of these runtime helper functions to populate the dictionary slot with a value:
-- `JIT_GenericHandleClass`: Used to lookup a value in a generic type dictionary. This helper is used by all instance methods on generic types.
-- `JIT_GenericHandleMethod`: Used to lookup a value in a generic method dictionary. This helper used by all generic methods, or non-generic static methods on generic types.
+まだ `NULL` であるスロットから情報をロードする際、ジェネリックコードはディクショナリスロットに値を設定するために、以下のランタイムヘルパー関数のいずれかを呼び出します:
 
-When generating shared generic code, the JIT knows which slots to use for the various lookups, and the kind of information contained in each slot using the help of the `DictionaryLayout` implementation ([genericdict.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/genericdict.cpp)).
+- `JIT_GenericHandleClass`: ジェネリック型ディクショナリの値を検索するために使用されます。このヘルパーは、ジェネリック型のすべてのインスタンスメソッドで使用されます。
+- `JIT_GenericHandleMethod`: ジェネリックメソッドディクショナリの値を検索するために使用されます。このヘルパーは、すべてのジェネリックメソッド、またはジェネリック型の非ジェネリックな静的メソッドで使用されます。
 
-### Dictionary Layouts
+共有ジェネリックコードを生成する際、JIT は `DictionaryLayout` の実装（[genericdict.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/genericdict.cpp)）を利用して、各種検索に使用するスロットと各スロットに含まれる情報の種類を把握します。
 
-The `DictionaryLayout` structure is what tells the JIT which slot to use when performing a dictionary lookup. This `DictionaryLayout` structure has a couple of important properties:
-- It is shared across all compatible instantiations of a certain type of method. In other words, a dictionary layout is associated with the canonical instantiation of a type or a method. For instance, in our example above, `Method<object>` and `Method<string>` are compatible instantiations, each with their own **separate dictionaries**, however they all share the **same dictionary layout**, which is associated with the canonical instantiation `Method<__Canon>`.
-- The dictionaries of generic types or methods have the same number of slots as their dictionary layouts. Note: historically before the introduction of the dynamic dictionary expansion feature, the generic dictionaries could be smaller than their layouts, meaning that for certain lookups, we had to invoke some runtime helper APIs (slow path).
+::: tip 💡 初心者向け補足
+ジェネリックディクショナリは、いわば「型情報の引き出し」のようなものです。`Method<string>` が実行されるとき、JIT が生成した共有コードは「今自分がどの型で動いているか」をこのディクショナリから調べます。たとえば `List<T>` の `T` が何であるかを知りたい場合、ハードコードする代わりにディクショナリのスロットを参照します。必要になるまでスロットを埋めない「遅延設定」方式により、使わない情報のための無駄な初期化を避けています。
+:::
 
-When a generic type or method is first created, its dictionary layout contains 'unassigned' slots. Assignments happen as part of code generation, whenever the JIT needs to emit a dictionary lookup sequence. This assignment happens during calls to the `DictionaryLayout::FindToken(...)` APIs. Once a slot has been assigned, it becomes associated with a certain signature, which describes the kind of value that will go in every instantiated dictionary at that slot index.
+### ディクショナリレイアウト
 
-Given an input signature, slot assignment is performed with the following algorithm:
+`DictionaryLayout` 構造体は、ディクショナリ検索を実行する際にどのスロットを使用するかを JIT に指示するものです。この `DictionaryLayout` 構造体には、いくつかの重要な特性があります:
+
+- これは、ある型またはメソッドの互換性のあるすべてのインスタンス化で共有されます。言い換えると、ディクショナリレイアウトは型またはメソッドの正規インスタンス化 (canonical instantiation) に関連付けられています。たとえば上記の例では、`Method<object>` と `Method<string>` は互換性のあるインスタンス化であり、それぞれが**個別のディクショナリ**を持っていますが、すべてが正規インスタンス化 `Method<__Canon>` に関連付けられた**同じディクショナリレイアウト**を共有しています。
+- ジェネリック型またはメソッドのディクショナリは、そのディクショナリレイアウトと同じ数のスロットを持ちます。注: 歴史的には、動的ディクショナリ拡張機能の導入以前は、ジェネリックディクショナリがレイアウトよりも小さい場合があり、特定の検索ではランタイムヘルパー API を呼び出す必要がありました（スローパス）。
+
+ジェネリック型またはメソッドが最初に作成されたとき、そのディクショナリレイアウトには「未割り当て」のスロットが含まれています。割り当ては、JIT がディクショナリ検索シーケンスを発行する必要があるときに、コード生成の一部として行われます。この割り当ては `DictionaryLayout::FindToken(...)` API の呼び出し中に行われます。スロットが一度割り当てられると、それは特定のシグネチャ (signature) に関連付けられ、そのシグネチャはそのスロットインデックスにおいてすべてのインスタンス化されたディクショナリに格納される値の種類を記述します。
+
+入力シグネチャが与えられた場合、スロットの割り当ては以下のアルゴリズムで実行されます:
 
 ```
-Begin with slot = 0
-Foreach entry in dictionary layout
+slot = 0 から開始
+ディクショナリレイアウトの各エントリに対して
     If entry.signature != NULL
         If entry.signature == inputSignature
             return slot
@@ -141,54 +157,64 @@ Foreach entry in dictionary layout
 EndForeach
 ```
 
-So what happens when the above algorithm runs, but no existing slot with the same signature is found, and we're out of 'unassigned' slots? This is where the dynamic dictionary expansion kicks in to resize the layout by adding more slots to it, and resizing all dictionaries associated with this layout.
+では、上記のアルゴリズムが実行されたが、同じシグネチャを持つ既存のスロットが見つからず、しかも「未割り当て」のスロットが尽きた場合はどうなるでしょうか？ここで動的ディクショナリ拡張 (dynamic dictionary expansion) が登場し、レイアウトにスロットを追加してリサイズし、このレイアウトに関連付けられたすべてのディクショナリもリサイズします。
 
-# Dynamic Dictionary Expansion
+# 動的ディクショナリ拡張
 
-### History
+### 歴史的背景
 
-Before the dynamic dictionary expansion feature, dictionary layouts were organized into buckets (a linked list of fixed-size `DictionaryLayout` structures). The size of the initial layout bucket was always fixed to some number which was computed based on some heuristics for generic types, and always fixed to 4 slots for generic methods. The generic types and methods also had fixed-size generic dictionaries which could be used for lookups (also known as "fast lookup slots").
+動的ディクショナリ拡張機能の導入以前は、ディクショナリレイアウトはバケット (bucket)（固定サイズの `DictionaryLayout` 構造体の連結リスト）で構成されていました。初期レイアウトバケットのサイズは、ジェネリック型についてはヒューリスティクスに基づいて計算された数値に常に固定され、ジェネリックメソッドについては常に 4 スロットに固定されていました。ジェネリック型とメソッドには、検索に使用できる固定サイズのジェネリックディクショナリもありました（「高速検索スロット (fast lookup slots)」とも呼ばれます）。
 
-When a bucket gets filled with entries, we would just allocate a new `DictionaryLayout` bucket, and add it to the list. The problem however is that we couldn't resize the generic dictionaries of types or methods, because they are already allocated with a fixed size, and the JIT does not support generating instructions that could indirect into a linked-list of dictionaries. Given that limitation, we could only lookup a generic dictionary for a fixed number of values (the ones associated with the entries of the first `DictionaryLayout` bucket), and were forced to go through a slower runtime helper for additional lookups.
+バケットがエントリで埋まると、新しい `DictionaryLayout` バケットをアロケートしてリストに追加するだけでした。しかし問題は、型やメソッドのジェネリックディクショナリはすでに固定サイズでアロケートされているためリサイズできず、JIT はディクショナリの連結リストに間接参照できる命令の生成をサポートしていなかったことです。この制約により、固定数の値（最初の `DictionaryLayout` バケットのエントリに関連付けられたもの）についてのみジェネリックディクショナリを検索でき、それ以外の検索についてはより低速なランタイムヘルパーを経由する必要がありました。
 
-This was acceptable, until we introduced the [ReadyToRun](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/readytorun-overview.md) and the Tiered Compilation technologies. Slots were getting assigned quickly when used by ReadyToRun code, and when the runtime decided re-jitted certain methods for better performance, it could not in some cases find any remaining "fast lookup slots", and was forced to generate code that goes through the slower runtime helpers. This ended up hurting performance in some scenarios, and a decision was made to not use the fast lookup slots for ReadyToRun code, and instead keep them reserved for re-jitted code. This decision however hurt the ReadyToRun performance, but it was a necessary compromise since we cared more about re-jitted code throughput over R2R throughput.
+これは、[ReadyToRun](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/readytorun-overview.md) と階層コンパイル (Tiered Compilation) 技術が導入されるまでは許容できるものでした。ReadyToRun コードによってスロットが急速に割り当てられ、ランタイムがパフォーマンス向上のために特定のメソッドを再 JIT コンパイルしたとき、残りの「高速検索スロット」が見つからない場合があり、より低速なランタイムヘルパーを経由するコードを生成せざるを得ませんでした。これにより一部のシナリオでパフォーマンスが低下し、ReadyToRun コードでは高速検索スロットを使用せず、再 JIT コンパイルされたコード用に予約しておくという決定がなされました。しかし、この決定は ReadyToRun のパフォーマンスを低下させるものでしたが、R2R のスループットよりも再 JIT コンパイルされたコードのスループットをより重視していたため、必要な妥協でした。
 
-For this reason, the dynamic dictionary expansion feature was introduced.
+このような理由から、動的ディクショナリ拡張機能が導入されました。
 
-### Description and Algorithms
+::: tip 💡 初心者向け補足
+ReadyToRun (R2R) は、アプリケーションの起動時間を短縮するための事前コンパイル (AOT) 技術です。階層コンパイル (Tiered Compilation) は、最初は高速に起動できるコードを生成し、頻繁に実行されるメソッドについてのみ最適化された再コンパイルを行う仕組みです。これらの技術では多くのジェネリックインスタンス化が使用されるため、ディクショナリのスロットが不足しやすく、動的に拡張できる仕組みが必要になりました。
+:::
 
-The feature is simple in concept: change dictionary layouts from a linked list of buckets into dynamically expandable arrays instead. Sounds simple, but great care had to be taken when implementing it, because:
-- We can't just resize `DictionaryLayout` structures alone. If the size of the layout is larger than the size of the actual generic dictionary, this would cause the JIT to generate indirection instructions that do not match the size of the dictionary data, leading to access violations.
-- We can't just resize generic dictionaries on types and methods:
-    - For types, the generic dictionary is part of the `MethodTable` structure, which can't be reallocated (already in use by managed code)
-    - For methods, the generic dictionary is not part of the `MethodDesc` structure, but can still be in use by some generic code.
-    - We can't have multiple MethodTables or MethodDescs for the same type or method anyways, so reallocations are not an option.
-- We can't just resize the generic dictionary for a single instantiation. For instance, in our example above, let's say we wanted to expand the dictionary for `Method<string>`. The resizing of the layout would have an impact on the shared canonical code that the JIT generates for `Method<__Canon>`. If we only resized the dictionary of `Method<string>`, the shared generic code would work for that instantiation only, but when we attempt to use it with another instantiation like `Method<object>`, the jitted instructions would no longer match the size of the dictionary structure, and would cause access violations.
-- The runtime is multi-threaded, which adds to the complexity.
+### 説明とアルゴリズム
 
-The current implementation expands the dictionary layout and the actual dictionaries separately to keep things simple:
+この機能のコンセプトはシンプルです: ディクショナリレイアウトをバケットの連結リストから、動的に拡張可能な配列に変更する、というものです。シンプルに聞こえますが、実装には細心の注意が必要でした。その理由は以下のとおりです:
 
- - Dictionary layouts are expanded when we are out of empty slots. See implementations of `DictionaryLayout::FindToken()` in [genericdict.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/genericdict.cpp).
- - Instantiated type and method dictionaries are expanded lazily on demand whenever any code is attempting to read the value of a slot beyond the size of the dictionary of that type or method. This is done through a call to the helper functions mentioned previously (`JIT_GenericHandleClass` and `JIT_GenericHandleMethod`).
+- `DictionaryLayout` 構造体だけをリサイズすることはできません。レイアウトのサイズが実際のジェネリックディクショナリのサイズより大きい場合、JIT がディクショナリデータのサイズと一致しない間接参照命令を生成し、アクセス違反 (access violation) を引き起こします。
+- 型やメソッドのジェネリックディクショナリだけをリサイズすることもできません:
+  - 型の場合、ジェネリックディクショナリは `MethodTable` 構造体の一部であり、マネージドコードで既に使用中のため再アロケートできません。
+  - メソッドの場合、ジェネリックディクショナリは `MethodDesc` 構造体の一部ではありませんが、ジェネリックコードで使用中の可能性があります。
+  - いずれにしても、同じ型やメソッドに対して複数の MethodTable や MethodDesc を持つことはできないため、再アロケートは選択肢にありません。
+- 単一のインスタンス化のジェネリックディクショナリだけをリサイズすることもできません。たとえば上記の例で、`Method<string>` のディクショナリを拡張したいとします。レイアウトのリサイズは、JIT が `Method<__Canon>` に対して生成する共有正規コード (shared canonical code) に影響を与えます。`Method<string>` のディクショナリだけをリサイズした場合、共有ジェネリックコードはそのインスタンス化でのみ動作しますが、`Method<object>` のような他のインスタンス化で使用しようとすると、JIT コンパイルされた命令がディクショナリ構造のサイズと一致しなくなり、アクセス違反を引き起こします。
+- ランタイムはマルチスレッド (multi-threaded) であり、これが複雑さをさらに増します。
 
-The dictionary access codegen is equivalent to the following (both in JITted code and ReadyToRun code):
-``` c++
-void* pMethodDesc = <some value>;		           // Input MethodDesc for the instantiated generic method
-int requiredOffset = <some value>;                 // Offset we need to access
+現在の実装では、シンプルさを保つために、ディクショナリレイアウトと実際のディクショナリの拡張を別々に行っています:
+
+- ディクショナリレイアウトは、空のスロットがなくなったときに拡張されます。[genericdict.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/genericdict.cpp) の `DictionaryLayout::FindToken()` の実装を参照してください。
+- インスタンス化された型とメソッドのディクショナリは、その型またはメソッドのディクショナリのサイズを超えるスロットの値をコードが読み取ろうとしたときに、遅延的にオンデマンドで拡張されます。これは、前述のヘルパー関数（`JIT_GenericHandleClass` および `JIT_GenericHandleMethod`）の呼び出しを通じて行われます。
+
+ディクショナリアクセスのコード生成は、以下のコードと同等です（JIT コンパイルされたコードと ReadyToRun コードの両方で同じ）:
+
+```c++
+void* pMethodDesc = <some value>;		           // インスタンス化されたジェネリックメソッドの入力 MethodDesc
+int requiredOffset = <some value>;                 // アクセスする必要のあるオフセット
 
 void* pDictionary = pMethodDesc->m_pPerInstInfo;
 
-// Note how we check for the dictionary size first before indirecting at 'requiredOffset'
+// 'requiredOffset' で間接参照する前に、まずディクショナリサイズを確認していることに注目
 if (pDictionary[sizeOffset] <= requiredOffset || pDictionary[requiredOffset] == NULL)
     pResult = JIT_GenericHandleMethod(pMethodDesc, <signature>);
 else
     pResult = pDictionary[requiredOffset];
 ```
 
-This size check is **not** done unconditionally every time we need to read a value from the dictionary, otherwise this would cause a noticeable performance regression. When a dictionary layout is first allocated, we keep track of the initial number of slots that were allocated, and **only** perform the size checks if we are attempting to read the value of a slot beyond those initial number of slots.
+このサイズチェックは、ディクショナリから値を読み取るたびに無条件に実行されるわけでは**ありません**。もしそうすると、顕著なパフォーマンス低下を引き起こすことになります。ディクショナリレイアウトが最初にアロケートされたとき、初期に割り当てられたスロット数を記録しておき、その初期スロット数を超えるスロットの値を読み取ろうとする場合に**のみ**サイズチェックを実行します。
 
-Dictionaries on types and methods are expanded by the `Dictionary::GetTypeDictionaryWithSizeCheck()` and `Dictionary::GetMethodDictionaryWithSizeCheck()` helper functions in [genericdict.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/genericdict.cpp).
+型とメソッドのディクショナリは、[genericdict.cpp](https://github.com/dotnet/runtime/blob/main/src/coreclr/vm/genericdict.cpp) の `Dictionary::GetTypeDictionaryWithSizeCheck()` および `Dictionary::GetMethodDictionaryWithSizeCheck()` ヘルパー関数によって拡張されます。
 
-One thing to note regarding types is that they can inherit dictionary pointers from their base types. This means that if we resize the generic dictionary on any given generic type, we will need to propagate the new dictionary pointer to all of its derived types. This propagation is also done in a lazy way whenever the code calls into the `JIT_GenericHandleWorker` helper function with a derived type MethodTable pointer. In that helper, if we find that the dictionary pointer on the base type has been updated, we copy it to the derived type.
+型に関して 1 つ注意すべき点は、型は基底型からディクショナリポインタを継承できるということです。これは、あるジェネリック型のジェネリックディクショナリをリサイズした場合、その派生型すべてに新しいディクショナリポインタを伝播させる必要があることを意味します。この伝播も、コードが派生型の MethodTable ポインタを使って `JIT_GenericHandleWorker` ヘルパー関数を呼び出す際に、遅延的に行われます。このヘルパーの中で、基底型のディクショナリポインタが更新されていることがわかった場合、それを派生型にコピーします。
 
-Old dictionaries are not deallocated after resizing, but once a new dictionary gets published on a MethodTable or MethodDesc, any subsequent dictionary lookup by generic code will make use of that newly allocated dictionary. Deallocating old dictionaries would be extremely complicated, especially in a multi-threaded environment, and won't give any useful benefit.
+::: tip 💡 初心者向け補足
+動的ディクショナリ拡張の設計上、最も困難な点は「すべてのインスタンス化のディクショナリを同期的にリサイズしなければならない」ことです。たとえば `Method<string>` のディクショナリだけを大きくしても、同じ共有コードを使う `Method<object>` のディクショナリが古いサイズのままだとクラッシュしてしまいます。この問題を解決するため、ランタイムはレイアウトの拡張とディクショナリの拡張を分離し、各ディクショナリは実際にアクセスされたタイミングで遅延的にリサイズされます。古いディクショナリは安全のために解放されず、新しいディクショナリが公開された時点で以降のアクセスはすべて新しいほうを使用します。
+:::
+
+古いディクショナリはリサイズ後に解放されませんが、新しいディクショナリが MethodTable または MethodDesc に公開されると、ジェネリックコードによるその後のディクショナリ検索はすべて、新しくアロケートされたディクショナリを使用するようになります。古いディクショナリの解放は、特にマルチスレッド環境では極めて複雑になり、有用なメリットもありません。

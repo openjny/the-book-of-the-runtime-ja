@@ -1,110 +1,129 @@
-# Vectors and Intrinsics
+# ベクトルとハードウェアイントリンシック
 
 ::: info 原文
 この章の原文は [Vectors and Intrinsics](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/vectors-and-intrinsics.md) です。
 :::
 
----
+## はじめに
 
-# Introduction
-The CoreCLR runtime has support for several varieties of hardware intrinsics, and various ways to compile code which uses them. This support varies by target processor, and the code produced depends on how the jit compiler is invoked. This document describes the various behaviors of intrinsics in the runtime, and concludes with implications  for developers working on the runtime and libraries portions of the runtime.
+CoreCLR ランタイムは、複数の種類のハードウェアイントリンシック (hardware intrinsics) をサポートしており、それらを使用するコードをコンパイルするためのさまざまな方法を提供しています。このサポートはターゲットプロセッサによって異なり、生成されるコードは JIT コンパイラの呼び出し方法に依存します。このドキュメントでは、ランタイムにおけるイントリンシックのさまざまな動作を説明し、ランタイムおよびライブラリの開発者への影響をまとめます。
 
-# Acronyms and definitions
-| Acronym | Definition
-| --- | --- |
-| AOT | Ahead of time. In this document, it refers to compiling code before the process launches and saving it into a file for later use.
+::: tip 💡 初心者向け補足
+ハードウェアイントリンシック (hardware intrinsics) とは、CPU が持つ特定の命令（SIMD 命令など）を、C# のコードから直接利用するための仕組みです。通常のコードよりも高速に処理できる場合があり、画像処理や数値計算などのパフォーマンスが重要な場面で活用されます。Java でいえば、JVM が内部的に行う最適化に近いものですが、.NET では開発者が明示的にこれらの命令を利用できます。
+:::
 
-# Intrinsics apis
-Most hardware intrinsics support is tied to the use of various Vector apis. There are 4 major api surfaces that are supported by the runtime
+## 略語と定義
 
-- The fixed length float vectors. `Vector2`, `Vector3`, and `Vector4`. These vector types represent a struct of floats of various lengths. For type layout, ABI and, interop purposes they are represented in exactly the same way as a structure with an appropriate number of floats in it. Operations on these vector types are supported on all architectures and platforms, although some architectures may optimize various operations.
-- The variable length `Vector<T>`. This represents vector data of runtime-determined length. In any given process the length of a `Vector<T>` is the same in all methods, but this length may differ between various machines or environment variable settings read at startup of the process. The `T` type variable may be the following types (`System.Byte`, `System.SByte`, `System.Int16`, `System.UInt16`, `System.Int32`, `System.UInt32`, `System.Int64`, `System.UInt64`, `System.Single`, and `System.Double`), and allows use of integer or double data within a vector. The length and alignment of `Vector<T>` is unknown to the developer at compile time (although discoverable at runtime by using the `Vector<T>.Count` api), and `Vector<T>` may not exist in any interop signature. Operations on these vector types are supported on all architectures and platforms, although some architectures may optimize various operations if the `Vector<T>.IsHardwareAccelerated` api returns true.
-- `Vector64<T>`, `Vector128<T>`, `Vector256<T>`, and `Vector512<T>` represent fixed-sized vectors that closely resemble the fixed- sized vectors available in C++. These structures can be used in any code that runs, but very few features are supported directly on these types other than creation. They are used primarily in the processor specific hardware intrinsics apis.
-- Processor specific hardware intrinsics apis such as `System.Runtime.Intrinsics.X86.Ssse3`. These apis map directly to individual instructions or short instruction sequences that are specific to a particular hardware instruction. These apis are only usable on hardware that supports the particular instruction. See https://github.com/dotnet/designs/blob/master/accepted/2018/platform-intrinsics.md for the design of these.
+| 略語 | 定義                                                                                                                                         |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| AOT  | 事前コンパイル (Ahead of Time)。このドキュメントでは、プロセスの起動前にコードをコンパイルし、ファイルに保存して後で使用することを指します。 |
 
-# How to use intrinsics apis
+## イントリンシック API
 
-There are 3 models for use of intrinsics apis.
+ハードウェアイントリンシックのサポートの大部分は、さまざまなベクトル (Vector) API の使用に結びついています。ランタイムがサポートする主要な API サーフェスは 4 つあります。
 
-1. Usage of `Vector2`, `Vector3`, `Vector4`, and `Vector<T>`. For these, its always safe to just use the types. The jit will generate code that is as optimal as it can for the logic, and will do so unconditionally.
-2. Usage of `Vector64<T>`, `Vector128<T>`, `Vector256<T>`, and `Vector512<T>`. These types may be used unconditionally, but are only truly useful when also using the platform specific hardware intrinsics apis.
-3. Usage of platform intrinsics apis. All usage of these apis should be wrapped in an `IsSupported` check of the appropriate kind. Then, within the `IsSupported` check the platform specific api may be used. If multiple instruction sets are used, then the application developer must have checks for the instruction sets as used on each one of them.
+- **固定長浮動小数点ベクトル (fixed length float vectors)**。`Vector2`、`Vector3`、`Vector4` です。これらのベクトル型は、さまざまな長さの float の構造体を表します。型レイアウト、ABI、および相互運用 (interop) の目的では、適切な数の float を持つ構造体とまったく同じ方法で表現されます。これらのベクトル型の操作はすべてのアーキテクチャとプラットフォームでサポートされていますが、一部のアーキテクチャではさまざまな操作が最適化される場合があります。
 
-# Effect of usage of hardware intrinsics on how code is generated
+- **可変長 `Vector<T>`**。これは、ランタイムで決定される長さのベクトルデータ (vector data) を表します。任意のプロセス内では、`Vector<T>` の長さはすべてのメソッドで同一ですが、マシンやプロセス起動時に読み取られる環境変数の設定によって異なる場合があります。型パラメータ `T` には、`System.Byte`、`System.SByte`、`System.Int16`、`System.UInt16`、`System.Int32`、`System.UInt32`、`System.Int64`、`System.UInt64`、`System.Single`、`System.Double` の型を指定でき、ベクトル内で整数データや倍精度浮動小数点データを使用できます。`Vector<T>` の長さとアライメント (alignment) はコンパイル時には開発者にとって未知です（ただし、`Vector<T>.Count` API を使用してランタイムに取得可能です）。また、`Vector<T>` は相互運用シグネチャ (interop signature) で使用できません。これらのベクトル型の操作はすべてのアーキテクチャとプラットフォームでサポートされていますが、`Vector<T>.IsHardwareAccelerated` API が true を返す場合には一部のアーキテクチャでさまざまな操作が最適化されることがあります。
 
-Hardware intrinsics have dramatic impacts on codegen, and the codegen of these hardware intrinsics is dependent on the ISA available for the target machine when the code is compiled.
+- **`Vector64<T>`、`Vector128<T>`、`Vector256<T>`、`Vector512<T>`** は、C++ で利用可能な固定サイズベクトルに近い固定サイズベクトルを表します。これらの構造体は実行されるあらゆるコードで使用できますが、作成以外にこれらの型で直接サポートされる機能はほとんどありません。主にプロセッサ固有のハードウェアイントリンシック API で使用されます。
 
-If the code is compiled at runtime by the JIT in a just-in-time manner, then the JIT will generate the best code it can based on the current processor's ISA. This use of hardware intrinsics is indendent of jit compilation tier. `MethodImplOptions.AggressiveOptimization` may be used to bypass compilation of tier 0 code and always produce tier 1 code for the method. In addition, the current policy of the runtime is that `MethodImplOptions.AggressiveOptimization` may also be used to bypass compilation of code as R2R code, although that may change in the future.
+- **プロセッサ固有のハードウェアイントリンシック API** (`System.Runtime.Intrinsics.X86.Ssse3` など)。これらの API は、特定のハードウェア命令に固有の個別の命令または短い命令シーケンスに直接マッピングされます。これらの API は、特定の命令をサポートするハードウェアでのみ使用可能です。設計については https://github.com/dotnet/designs/blob/master/accepted/2018/platform-intrinsics.md を参照してください。
 
-For AOT compilation, the situation is far more complex. This is due to the following principles of how our AOT compilation model works.
+::: tip 💡 初心者向け補足
+ベクトル型は大きく分けて 2 種類あります。`Vector2`/`Vector3`/`Vector4` や `Vector<T>` は、プラットフォームに依存せず安全に使用できる「ポータブル」なベクトルです。一方、`Vector128<T>` や `System.Runtime.Intrinsics.X86.Avx2` などは特定の CPU アーキテクチャに依存する「プラットフォーム固有」のベクトルおよび API です。後者を使用する場合は、そのハードウェアが利用可能かどうかを `IsSupported` プロパティで必ず確認する必要があります。
+:::
 
-1. AOT compilation must never under any circumstance change the semantic behavior of code except for changes in performance.
-2. If AOT code is generated, it should be used unless there is an overriding reason to avoid using it.
-3. It must be exceedingly difficult to misuse the AOT compilation tool to violate principle 1.
+## イントリンシック API の使用方法
 
-## Crossgen2 model of hardware intrinsic usage
-There are 2 sets of instruction sets known to the compiler.
-- The baseline instruction set which defaults to x86-64-v2 (SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, and POPCNT), but may be adjusted via compiler option.
-- The optimistic instruction set which defaults to (AES, GFNI, SHA, WAITPKG, and X86SERIALIZE).
+イントリンシック API の使用モデルは 3 つあります。
 
-Code will be compiled using the optimistic instruction set to drive compilation, but any use of an instruction set beyond the baseline instruction set will be recorded, as will any attempt to use an instruction set beyond the optimistic set if that attempted use has a semantic effect. If the baseline instruction set includes `Avx2` then the size and characteristics of of `Vector<T>` is known. Any other decisions about ABI may also be encoded. For instance, it is likely that the ABI of `Vector256<T>` and `Vector512<T>` will vary based on the presence/absence of `Avx` support.
+1. **`Vector2`、`Vector3`、`Vector4`、`Vector<T>` の使用**。これらについては、常に安全にそのまま型を使用できます。JIT はロジックに対して可能な限り最適なコードを無条件に生成します。
+2. **`Vector64<T>`、`Vector128<T>`、`Vector256<T>`、`Vector512<T>` の使用**。これらの型は無条件に使用できますが、プラットフォーム固有のハードウェアイントリンシック API と併用する場合にのみ真に有用です。
+3. **プラットフォームイントリンシック API の使用**。これらの API の使用はすべて、適切な種類の `IsSupported` チェックでラップする必要があります。そして、`IsSupported` チェック内でプラットフォーム固有の API を使用できます。複数の命令セットを使用する場合、アプリケーション開発者はそれぞれの命令セットに対してチェックを行う必要があります。
 
-- Any code which uses `Vector<T>` will not be compiled AOT unless the size of `Vector<T>` is known.
-- Any code which passes a `Vector256<T>` or `Vector512<T>` as a parameter on a Linux or Mac machine will not be compiled AOT unless the support for the `Avx` instruction set is known.
-- Non-platform intrinsics which require more hardware support than the optimistic supported hardware capability will not take advantage of that capability. MethodImplOptions.AggressiveOptimization may be used to disable compilation of this sub-par code.
-- Code which takes advantage of instructions sets in the optimistic set will not be used on a machine which only supports the baseline instruction set.
-- Code which attempts to use instruction sets outside of the optimistic set will generate code that will not be used on machines with support for the instruction set.
+## ハードウェアイントリンシックの使用がコード生成に与える影響
 
-#### Characteristics which result from rules
-- Code which uses platform intrinsics within the optimistic instruction set will generate good code.
-- Code which relies on platform intrinsics not within the baseline or optimistic set will cause runtime jit and startup time concerns if used on hardware which does support the instruction set.
-- `Vector<T>` code has runtime jit and startup time concerns unless the baseline is raised to include `Avx2`.
+ハードウェアイントリンシックはコード生成 (codegen) に大きな影響を与え、これらのハードウェアイントリンシックのコード生成は、コードがコンパイルされるときにターゲットマシンで利用可能な ISA (命令セットアーキテクチャ) に依存します。
 
-#### Code review rules for use of platform intrinsics
--  Any use of a platform intrinsic in the codebase SHOULD be wrapped with a call to the associated IsSupported property. This wrapping may be done within the same function that uses the hardware intrinsic, but this is not required as long as the programmer can control all entrypoints to a function that uses the hardware intrinsic.
--  If an application developer is highly concerned about startup performance, developers should avoid use intrinsics beyond Sse42, or should use Crossgen with an updated baseline instruction set support.
+コードが JIT によってジャストインタイム (just-in-time) 方式でランタイムにコンパイルされる場合、JIT は現在のプロセッサの ISA に基づいて可能な限り最適なコードを生成します。このハードウェアイントリンシックの使用は、JIT コンパイルティア (compilation tier) に依存しません。`MethodImplOptions.AggressiveOptimization` を使用して、ティア 0 コードのコンパイルをバイパスし、メソッドに対して常にティア 1 コードを生成するようにすることができます。さらに、ランタイムの現在のポリシーでは、`MethodImplOptions.AggressiveOptimization` を使用して R2R コードとしてのコンパイルもバイパスできますが、これは将来変更される可能性があります。
 
-### Crossgen2 adjustment to rules for System.Private.CoreLib.dll
-Since System.Private.CoreLib.dll is known to be code reviewed with the code review rules as written below with System.Private.CoreLib.dll, it is possible to relax rule "Code which attempts to use instruction sets outside of the optimistic set will generate code that will not be used on machines with support for the instruction set." What this will do is allow the generation of non-optimal code for these situations, but through the magic of code review and analyzers, the generated logic will still work correctly.
+::: tip 💡 初心者向け補足
+**ティアードコンパイル (tiered compilation)** とは、.NET ランタイムが採用する段階的コンパイル方式です。最初に高速だが最適化の少ないティア 0 コードを生成し、頻繁に呼び出されるメソッドについては後からより最適化されたティア 1 コードを再コンパイルします。`MethodImplOptions.AggressiveOptimization` を指定すると、最初から最適化されたコードを生成するようになります。**R2R (ReadyToRun)** は AOT コンパイルの一形態で、事前にコンパイルされたネイティブコードをアセンブリに埋め込み、アプリケーションの起動時間を短縮します。
+:::
 
-#### Code review and analyzer rules for code written in System.Private.CoreLib.dll
-- Any use of a platform intrinsic in the codebase MUST be wrapped with a call to an associated IsSupported property. This wrapping MUST be done within the same function that uses the hardware intrinsic, OR the function which uses the platform intrinsic must have the `CompExactlyDependsOn` attribute used to indicate that this function will unconditionally call platform intrinsics of from some type.
-- Within a single function that uses platform intrinsics, unless marked with the `CompExactlyDependsOn` attribute it must behave identically regardless of whether IsSupported returns true or not. This allows the R2R compiler to compile with a lower set of intrinsics support, and yet expect that the behavior of the function will remain unchanged in the presence of tiered compilation.
-- Excessive use of intrinsics may cause startup performance problems due to additional jitting, or may not achieve desired performance characteristics due to suboptimal codegen. To fix this, we may, in the future, change the compilation rules to compile the methods marked with`CompExactlyDependsOn` with the appropriate platform intrinsics enabled.
+AOT コンパイルの場合は、状況ははるかに複雑になります。これは、AOT コンパイルモデルの以下の原則によるものです。
 
-Correct use of the `IsSupported` properties and `CompExactlyDependsOn` attribute is checked by an analyzer during build of `System.Private.CoreLib`. This analyzer requires that all usage of `IsSupported` properties conform to a few specific patterns. These patterns are supported via either if statements or the ternary operator.
+1. AOT コンパイルは、いかなる状況においても、パフォーマンスの変化を除いてコードのセマンティックな動作を変更してはなりません。
+2. AOT コードが生成された場合、使用を避ける正当な理由がない限り、そのコードを使用すべきです。
+3. AOT コンパイルツールを誤用して原則 1 に違反することは、極めて困難でなければなりません。
 
-The supported conditional checks are
+## Crossgen2 のハードウェアイントリンシック使用モデル
 
-1. Simple if statement checking IsSupported flag surrounding usage
-```
+コンパイラに認識される命令セットは 2 つのセットがあります。
+
+- **ベースライン命令セット (baseline instruction set)**: デフォルトでは x86-64-v2 (SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT) ですが、コンパイラオプションで調整できます。
+- **楽観的命令セット (optimistic instruction set)**: デフォルトでは (AES, GFNI, SHA, WAITPKG, X86SERIALIZE) です。
+
+コードは楽観的命令セットを使用してコンパイルが駆動されますが、ベースライン命令セットを超える命令セットの使用は記録され、また楽観的セットを超える命令セットの使用がセマンティックな影響を持つ場合は、その試みも記録されます。ベースライン命令セットに `Avx2` が含まれている場合、`Vector<T>` のサイズと特性が既知になります。ABI に関するその他の決定もエンコードされる可能性があります。たとえば、`Vector256<T>` と `Vector512<T>` の ABI は `Avx` サポートの有無に基づいて変わる可能性があります。
+
+- `Vector<T>` を使用するコードは、`Vector<T>` のサイズが既知でない限り AOT コンパイルされません。
+- Linux または Mac マシンで `Vector256<T>` または `Vector512<T>` をパラメータとして渡すコードは、`Avx` 命令セットのサポートが既知でない限り AOT コンパイルされません。
+- 楽観的にサポートされるハードウェア能力を超えるハードウェアサポートを必要とする非プラットフォームイントリンシックは、その能力を活用しません。`MethodImplOptions.AggressiveOptimization` を使用して、この準最適なコードのコンパイルを無効にすることができます。
+- 楽観的セットの命令セットを活用するコードは、ベースライン命令セットのみをサポートするマシンでは使用されません。
+- 楽観的セット外の命令セットを使用しようとするコードは、その命令セットをサポートするマシン上で使用されないコードを生成します。
+
+#### ルールから生じる特性
+
+- 楽観的命令セット内のプラットフォームイントリンシックを使用するコードは、良好なコードを生成します。
+- ベースラインまたは楽観的セットに含まれないプラットフォームイントリンシックに依存するコードは、その命令セットをサポートするハードウェアで使用された場合、ランタイム JIT と起動時間の問題を引き起こします。
+- `Vector<T>` コードは、ベースラインを `Avx2` を含むように引き上げない限り、ランタイム JIT と起動時間の問題があります。
+
+#### プラットフォームイントリンシック使用のコードレビュールール
+
+- コードベースでのプラットフォームイントリンシックの使用は、関連する `IsSupported` プロパティへの呼び出しでラップすべきです (SHOULD)。このラッピングは、ハードウェアイントリンシックを使用する同じ関数内で行うことができますが、プログラマがハードウェアイントリンシックを使用する関数へのすべてのエントリポイントを制御できる限り、必須ではありません。
+- アプリケーション開発者が起動パフォーマンスを非常に気にする場合、開発者は SSE4.2 を超えるイントリンシックの使用を避けるか、更新されたベースライン命令セットサポートで Crossgen を使用すべきです。
+
+### System.Private.CoreLib.dll のための Crossgen2 ルールの調整
+
+System.Private.CoreLib.dll は、以下に記述するコードレビュールールに基づいてコードレビューされることが判明しているため、「楽観的セット外の命令セットを使用しようとするコードは、その命令セットをサポートするマシン上で使用されないコードを生成する」というルールを緩和することが可能です。これにより、これらの状況では非最適なコードが生成されますが、コードレビューとアナライザーの効果により、生成されたロジックは正しく動作します。
+
+#### System.Private.CoreLib.dll で記述されるコードのコードレビューおよびアナライザールール
+
+- コードベースでのプラットフォームイントリンシックの使用は、関連する `IsSupported` プロパティへの呼び出しでラップしなければなりません (MUST)。このラッピングは、ハードウェアイントリンシックを使用する同じ関数内で行わなければなりません (MUST)。あるいは、プラットフォームイントリンシックを使用する関数は、`CompExactlyDependsOn` 属性を使用して、この関数がある型のプラットフォームイントリンシックを無条件に呼び出すことを示す必要があります。
+- プラットフォームイントリンシックを使用する単一の関数内では、`CompExactlyDependsOn` 属性でマークされていない限り、`IsSupported` が true を返すか false を返すかにかかわらず、同一の動作をしなければなりません。これにより、R2R コンパイラがより低いイントリンシックサポートセットでコンパイルしても、ティアードコンパイレーション (tiered compilation) 下でその関数の動作が変わらないことを期待できます。
+- イントリンシックの過度な使用は、追加の JIT コンパイルによる起動パフォーマンスの問題、または準最適なコード生成によるパフォーマンス特性の未達成を引き起こす可能性があります。これを修正するために、将来的には `CompExactlyDependsOn` でマークされたメソッドを適切なプラットフォームイントリンシックを有効にしてコンパイルするようにコンパイルルールを変更する可能性があります。
+
+`IsSupported` プロパティと `CompExactlyDependsOn` 属性の正しい使用は、`System.Private.CoreLib` のビルド中にアナライザーによって検査されます。このアナライザーは、`IsSupported` プロパティのすべての使用が、いくつかの特定のパターンに準拠することを要求します。これらのパターンは、if 文または三項演算子 (ternary operator) を介してサポートされます。
+
+サポートされる条件チェックは以下のとおりです。
+
+1. `IsSupported` フラグを使用した単純な if 文による囲み
+
+```csharp
 if (PlatformIntrinsicType.IsSupported)
 {
     PlatformIntrinsicType.IntrinsicMethod();
 }
 ```
 
-2. If statement check checking a platform intrinsic type which implies
-that the intrinsic used is supported.
+2. 使用されるイントリンシックがサポートされることを暗示するプラットフォームイントリンシック型をチェックする if 文
 
-```
+```csharp
 if (Avx2.X64.IsSupported)
 {
     Avx2.IntrinsicMethod();
 }
 ```
 
-3. Nested if statement where there is an outer condition which is an
-OR'd together series of IsSupported checks for mutually exclusive
-conditions and where the inner check is an else clause where some checks
-are excluded from applying.
+3. 外側の条件が相互に排他的な条件の `IsSupported` チェックを OR で結合したシリーズであり、内側のチェックが一部のチェックの適用を除外する else 節であるネストされた if 文
 
-```
+```csharp
 if (Avx2.IsSupported || ArmBase.IsSupported)
 {
     if (Avx2.IsSupported)
     {
-        // Do something
+        // 何かを行う
     }
     else
     {
@@ -113,13 +132,13 @@ if (Avx2.IsSupported || ArmBase.IsSupported)
 }
 ```
 
-4. Within a method marked with `CompExactlyDependsOn` for a less advanced attribute, there may be a use of an explicit IsSupported check for a more advanced cpu feature. If so, the behavior of the overall function must remain the same regardless of whether or not the CPU feature is enabled. The analyzer will detect this usage as a warning, so that any use of IsSupported in a helper method is examined to verify that that use follows the rule of preserving exactly equivalent behavior.
+4. より低いレベルの属性に対して `CompExactlyDependsOn` でマークされたメソッド内で、より高度な CPU 機能に対して明示的な `IsSupported` チェックを使用する場合があります。その場合、関数全体の動作は、CPU 機能が有効かどうかにかかわらず同一でなければなりません。アナライザーはこの使用を警告として検出し、ヘルパーメソッド内の `IsSupported` の使用が、まったく同等の動作を維持するルールに従っていることを確認します。
 
-```
+```csharp
 [CompExactlyDependsOn(typeof(Sse41))]
 int DoSomethingHelper()
 {
-#pragma warning disable IntrinsicsInSystemPrivateCoreLibAttributeNotSpecificEnough // The else clause is semantically equivalent
+#pragma warning disable IntrinsicsInSystemPrivateCoreLibAttributeNotSpecificEnough // else 節はセマンティック的に同等
     if (Avx2.IsSupported)
 #pragma warning disable IntrinsicsInSystemPrivateCoreLibAttributeNotSpecificEnough
     {
@@ -133,14 +152,13 @@ int DoSomethingHelper()
 }
 ```
 
-- NOTE: If the helper needs to be used AND behave differently with different instruction sets enabled, correct logic requires spreading the `CompExactlyDependsOn` attribute to all callers such that no caller could be compiled expecting the wrong behavior. See the `Vector128.ShuffleUnsafe` method, and various uses.
+- 注: ヘルパーが異なる命令セットが有効な場合に異なる動作をする必要がある場合、正しいロジックでは `CompExactlyDependsOn` 属性をすべての呼び出し元に広げ、いかなる呼び出し元も間違った動作を期待してコンパイルされないようにする必要があります。`Vector128.ShuffleUnsafe` メソッドおよびさまざまな使用例を参照してください。
 
+`CompExactlyDependsOn` の動作は、特定のメソッドに 1 つ以上の属性を適用できることです。属性で指定された型のいずれかが、関連する `IsSupported` プロパティに対してランタイム時に不変の結果を持たない場合、そのメソッドは R2R コンパイル中に別の関数にコンパイルまたはインライン化されません。そのように記述された型のいずれも `IsSupported` メソッドに対して true の結果を持たない場合、そのメソッドは R2R コンパイル中に別の関数にコンパイルまたはインライン化されません。
 
-The behavior of the `CompExactlyDependsOn` is that 1 or more attributes may be applied to a given method. If any of the types specified via the attribute will not have an invariant result for its associated `IsSupported` property at runtime, then the method will not be compiled or inlined into another function during R2R compilation. If no type so described will have a true result for the `IsSupported` method, then the method will not be compiled or inlined into another function during R2R compilation.
+5. `IsSupported` プロパティを直接使用してイントリンシックのサポートを有効/無効にすることに加えて、コードの重複を減らすために、以下のスタイルで記述されたシンプルな静的プロパティ (static property) を使用できます。
 
-5. In addition to directly using the IsSupported properties to enable/disable support for intrinsics, simple static properties written in the following style may be used to reduce code duplication.
-
-```
+```csharp
 static bool IsVectorizationSupported => Avx2.IsSupported || PackedSimd.IsSupported
 
 public void SomePublicApi()
@@ -149,7 +167,7 @@ public void SomePublicApi()
         SomeVectorizationHelper();
     else
     {
-        // Non-Vectorized implementation
+        // ベクトル化されない実装
     }
 }
 
@@ -160,26 +178,30 @@ private void SomeVectorizationHelper()
 }
 ```
 
-#### Non-Deterministic Intrinsics in System.Private.Corelib
+::: tip 💡 初心者向け補足
+`CompExactlyDependsOn` 属性は、System.Private.CoreLib 内のコードで使用される特殊な属性です。この属性は「このメソッドは指定された命令セットに正確に依存する」ことを宣言します。R2R (ReadyToRun) コンパイル時にこの情報が使用され、適切な命令セットが利用可能な場合にのみコードがコンパイル・インライン化されるようになります。一般のアプリケーション開発者がこの属性を直接使用することはほとんどありません。
+:::
 
-Some APIs exposed in System.Private.Corelib are intentionally non-deterministic across hardware and instead only ensure determinism within the scope of a single process. To facilitate the support of such APIs, the JIT defines `Compiler::BlockNonDeterministicIntrinsics(bool mustExpand)` which should be used to help block such APIs from expanding in scenarios such as ReadyToRun. Additionally, such APIs should recursively call themselves so that indirect invocation (such as via a delegate, function pointer, reflection, etc) will compute the same result.
+#### System.Private.CoreLib における非決定的イントリンシック
 
-An example of such a non-deterministic API is the `ConvertToIntegerNative` APIs exposed on `System.Single` and `System.Double`. These APIs convert from the source value to the target integer type using the fastest mechanism available for the underlying hardware. They exist due to the IEEE 754 specification leaving conversions undefined when the input cannot fit into the output (for example converting `float.MaxValue` to `int`) and thus different hardware having historically provided differing behaviors on these edge cases. They allow developers who do not need to be concerned with edge case handling but where the performance overhead of normalizing results for the default cast operator is too great.
+System.Private.CoreLib で公開されている一部の API は、意図的にハードウェア間で非決定的 (non-deterministic) であり、単一プロセスのスコープ内でのみ決定性を保証します。このような API のサポートを容易にするために、JIT は `Compiler::BlockNonDeterministicIntrinsics(bool mustExpand)` を定義しており、ReadyToRun などのシナリオでこのような API の展開をブロックするために使用されるべきです。さらに、このような API は自身を再帰的に呼び出すべきであり、間接的な呼び出し（デリゲート、関数ポインタ、リフレクションなど経由）でも同じ結果が計算されるようにします。
 
-Another example is the various `*Estimate` APIs, such as `float.ReciprocalSqrtEstimate`. These APIs allow a user to likewise opt into a faster result at the cost of some inaccuracy, where the exact inaccuracy encountered depends on the input and the underlying hardware the instruction is executed against.
+このような非決定的 API の例として、`System.Single` と `System.Double` で公開されている `ConvertToIntegerNative` API があります。これらの API は、基盤となるハードウェアで利用可能な最速のメカニズムを使用して、ソース値をターゲット整数型に変換します。これらの API が存在する理由は、IEEE 754 仕様が入力を出力に収められない場合の変換を未定義としており（たとえば `float.MaxValue` を `int` に変換する場合）、その結果、異なるハードウェアがこれらのエッジケースで歴史的に異なる動作を提供してきたためです。これらの API により、エッジケースの処理を気にする必要がないが、デフォルトのキャスト演算子の結果を正規化するパフォーマンスオーバーヘッドが大きすぎる開発者に対して代替手段を提供します。
 
-# Mechanisms in the JIT to generate correct code to handle varied instruction set support
+もう 1 つの例は、`float.ReciprocalSqrtEstimate` などのさまざまな `*Estimate` API です。これらの API により、ユーザーは多少の不正確さのコストでより高速な結果を選択でき、発生する正確な不正確さは入力と命令が実行される基盤ハードウェアに依存します。
 
-The JIT receives flags which instruct it on what instruction sets are valid to use, and has access to a new jit interface api `notifyInstructionSetUsage(isa, bool supportBehaviorRequired)`.
+## JIT でさまざまな命令セットサポートに対して正しいコードを生成するためのメカニズム
 
-The notifyInstructionSetUsage api is used to notify the AOT compiler infrastructure that the code may only execute if the runtime environment of the code is exactly the same as the boolean parameter indicates it should be. For instance, if `notifyInstructionSetUsage(Avx, false)` is used, then the code generated must not be used if the `Avx` instruction set is usable. Similarly `notifyInstructionSetUsage(Avx, true)` will indicate that the code may only be used if the `Avx` instruction set is available.
+JIT は使用可能な命令セット (instruction set) を指示するフラグを受け取り、新しい JIT インターフェース API `notifyInstructionSetUsage(isa, bool supportBehaviorRequired)` にアクセスできます。
 
-While the above api exists, it is not expected that general purpose code within the JIT will use it. In general jitted code is expected to use a number of different apis to understand the available hardware instruction support available.
+`notifyInstructionSetUsage` API は、コードがブールパラメータが示すとおりのランタイム環境でのみ実行できることを AOT コンパイラインフラストラクチャに通知するために使用されます。たとえば、`notifyInstructionSetUsage(Avx, false)` が使用された場合、生成されたコードは `Avx` 命令セットが使用可能な場合に使用されてはなりません。同様に、`notifyInstructionSetUsage(Avx, true)` は、コードが `Avx` 命令セットが利用可能な場合にのみ使用できることを示します。
 
-| Api | Description of use | Exact behavior
-| --- | --- | --- |
-|`compExactlyDependsOn(isa)`| Use when making a decision to use or not use an instruction set when the decision will affect the semantics of the generated code. Should never be used in an assert. | Return whether or not an instruction set is supported. Calls notifyInstructionSetUsage with the result of that computation.
-|`compOpportunisticallyDependsOn(isa)`| Use when making an opportunistic decision to use or not use an instruction set. Use when the instruction set usage is a "nice to have optimization opportunity", but do not use when a false result may change the semantics of the program. Should never be used in an assert. | Return whether or not an instruction set is supported. Calls notifyInstructionSetUsage if the instruction set is supported.
-|`compIsaSupportedDebugOnly(isa)` | Use to assert whether or not an instruction set is supported | Return whether or not an instruction set is supported. Does not report anything. Only available in debug builds.
-|`getVectorTByteLength()` | Use to get the size of a `Vector<T>` value. | Determine the size of the `Vector<T>` type. If on the architecture the size may vary depending on whatever rules. Use `compExactlyDependsOn` to perform the queries so that the size is consistent between compile time and runtime.
-|`getMaxVectorByteLength()`| Get the maximum number of bytes that might be used in a SIMD type during this compilation. | Query the set of instruction sets supported, and determine the largest simd type supported. Use `compOpportunisticallyDependsOn` to perform the queries so that the maximum size needed is the only one recorded.
+上記の API は存在しますが、JIT 内の汎用コードがこれを使用することは想定されていません。一般的に、JIT コンパイルされるコードは、利用可能なハードウェア命令サポートを理解するためにいくつかの異なる API を使用することが期待されています。
+
+| API                                   | 使用方法の説明                                                                                                                                                                                                                                                               | 厳密な動作                                                                                                                                                                                         |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `compExactlyDependsOn(isa)`           | 命令セットを使用するかしないかの決定が、生成されるコードのセマンティクスに影響を与える場合に使用します。アサーションでは使用しないでください。                                                                                                                               | 命令セットがサポートされているかどうかを返します。その計算結果とともに `notifyInstructionSetUsage` を呼び出します。                                                                                |
+| `compOpportunisticallyDependsOn(isa)` | 命令セットを使用するかしないかの機会主義的な決定を行う場合に使用します。命令セットの使用が「あれば嬉しい最適化の機会」である場合に使用し、false の結果がプログラムのセマンティクスを変更する可能性がある場合には使用しないでください。アサーションでは使用しないでください。 | 命令セットがサポートされているかどうかを返します。命令セットがサポートされている場合に `notifyInstructionSetUsage` を呼び出します。                                                                |
+| `compIsaSupportedDebugOnly(isa)`      | 命令セットがサポートされているかどうかをアサートするために使用します。                                                                                                                                                                                                       | 命令セットがサポートされているかどうかを返します。何も報告しません。デバッグビルドでのみ使用可能です。                                                                                             |
+| `getVectorTByteLength()`              | `Vector<T>` 値のサイズを取得するために使用します。                                                                                                                                                                                                                           | `Vector<T>` 型のサイズを決定します。アーキテクチャ上でサイズが変動する可能性がある場合は、コンパイル時とランタイム間でサイズが一貫するように `compExactlyDependsOn` を使用してクエリを実行します。 |
+| `getMaxVectorByteLength()`            | このコンパイルで SIMD 型に使用される可能性がある最大バイト数を取得します。                                                                                                                                                                                                   | サポートされる命令セットのセットをクエリし、サポートされる最大の SIMD 型を決定します。必要な最大サイズのみが記録されるように `compOpportunisticallyDependsOn` を使用してクエリを実行します。       |

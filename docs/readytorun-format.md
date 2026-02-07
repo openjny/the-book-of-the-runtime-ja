@@ -1,89 +1,68 @@
-# ReadyToRun File Format
+# ReadyToRun ファイルフォーマット
 
 ::: info 原文
 この章の原文は [ReadyToRun File Format](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/readytorun-format.md) です。
 :::
 
-Revisions:
-* 1.1 - [Jan Kotas](https://github.com/jkotas) - 2015
-* 3.1 - [Tomas Rylek](https://github.com/trylek) - 2019
-* 4.1 - [Tomas Rylek](https://github.com/trylek) - 2020
-* 5.3 - [Tomas Rylek](https://github.com/trylek) - 2021
-* 5.4 - [David Wrighton](https://github.com/davidwrighton) - 2021
-* 6.3 - [David Wrighton](https://github.com/davidwrighton) - 2022
+改訂履歴:
 
-# Introduction
+- 1.1 - [Jan Kotas](https://github.com/jkotas) - 2015
+- 3.1 - [Tomas Rylek](https://github.com/trylek) - 2019
+- 4.1 - [Tomas Rylek](https://github.com/trylek) - 2020
+- 5.3 - [Tomas Rylek](https://github.com/trylek) - 2021
+- 5.4 - [David Wrighton](https://github.com/davidwrighton) - 2021
+- 6.3 - [David Wrighton](https://github.com/davidwrighton) - 2022
 
-This document describes ReadyToRun format 3.1 implemented in CoreCLR as of June 2019 and not yet
-implemented proposed extensions 4.1 for the support of composite R2R file format.
-**Composite R2R file format** has basically the same structure as the traditional R2R file format
-defined in earlier revisions except that the output file represents a larger number of input MSIL
-assemblies compiled together as a logical unit.
+# はじめに
 
-# PE Headers and CLI Headers
+本ドキュメントでは、2019年6月時点で CoreCLR に実装されている ReadyToRun フォーマット (R2R) 3.1、およびコンポジット (Composite) R2R ファイルフォーマットのサポートのためにまだ実装されていない拡張提案 4.1 について説明します。
+**コンポジット R2R ファイルフォーマット**は、以前のリビジョンで定義された従来の R2R ファイルフォーマットと基本的に同じ構造を持ちますが、出力ファイルがより多くの入力 MSIL アセンブリを論理的な単位としてまとめてコンパイルしたものを表す点が異なります。
 
-**Single-file ReadyToRun images** conform to CLI file format as described in ECMA-335
-with the following customizations:
+::: tip 💡 初心者向け補足
+ReadyToRun (R2R) は、.NET の事前コンパイル (AOT: Ahead-Of-Time) 技術の一つです。通常 .NET アプリケーションは実行時に JIT (Just-In-Time) コンパイラによって中間言語 (IL) からネイティブコードに変換されますが、R2R ではビルド時にあらかじめネイティブコードを生成しておくことで、起動時間を短縮できます。Java でいう AOT コンパイル (GraalVM の Native Image など) に似た概念です。
+:::
 
-- The PE file is always platform specific
-- CLI Header Flags field has set `COMIMAGE_FLAGS_IL_LIBRARY` (0x00000004) bit set
-- CLI Header `ManagedNativeHeader` points to READYTORUN_HEADER
+# PE ヘッダーと CLI ヘッダー
 
-The COR header and ECMA 335 metadata pointed to by the COM descriptor data directory item
-in the COFF header represent a full copy of the input IL and MSIL metadata it was generated from.
+**単一ファイル ReadyToRun イメージ**は、ECMA-335 に記述された CLI ファイルフォーマットに準拠しますが、以下のカスタマイズが加えられています:
 
-**Composite R2R files** currently conform to Windows PE executable file format as the
-native envelope. Moving forward we [plan to gradually add support for platform-native
-executable formats](./readytorun-platform-native-envelope) (ELF on Linux, MachO on OSX) as the native envelopes. There is a
-global CLI / COR header in the file, but it only exists to facilitate pdb generation, and does
-not participate in any usages by the CoreCLR runtime. The ReadyToRun header structure is pointed to
-by the well-known export symbol `RTR_HEADER` and has the `READYTORUN_FLAG_COMPOSITE` flag set.
+- PE ファイルは常にプラットフォーム固有です
+- CLI ヘッダーの Flags フィールドに `COMIMAGE_FLAGS_IL_LIBRARY` (0x00000004) ビットが設定されています
+- CLI ヘッダーの `ManagedNativeHeader` が READYTORUN_HEADER を指します
 
-Input MSIL metadata and IL streams can be either embedded in the composite R2R file or left
-as separate files on disk. In case of embedded MSIL, the "actual" metadata for the individual
-component assemblies is accessed via the R2R section `ComponentAssemblies`.
+COFF ヘッダーの COM ディスクリプタ (descriptor) データディレクトリ項目が指す COR ヘッダーと ECMA 335 メタデータは、生成元の入力 IL および MSIL メタデータの完全なコピーを表します。
 
-**Standalone MSIL files** used as the source of IL and metadata for composite R2R executables
-without MSIL embedding are copied to the output folder next to the composite R2R executable
-and are rewritten by the compiler to include a formal ReadyToRun header with forwarding
-information pointing to the owner composite R2R executable (section `OwnerCompositeExecutable`).
+**コンポジット R2R ファイル**は現在、ネイティブエンベロープ (envelope) として Windows PE 実行可能ファイルフォーマットに準拠しています。今後は、ネイティブエンベロープとして[プラットフォームネイティブの実行可能フォーマットのサポートを段階的に追加する予定](./readytorun-platform-native-envelope)です (Linux では ELF、macOS では MachO)。ファイル内にグローバルな CLI / COR ヘッダーが存在しますが、それは PDB 生成を容易にするためだけのものであり、CoreCLR ランタイムによる使用には関与しません。ReadyToRun ヘッダー構造体は、よく知られたエクスポートシンボル `RTR_HEADER` によって指され、`READYTORUN_FLAG_COMPOSITE` フラグが設定されています。
 
-# Additions to the debug directory
+入力 MSIL メタデータと IL ストリームは、コンポジット R2R ファイルに埋め込むことも、ディスク上の個別ファイルとして残すこともできます。MSIL が埋め込まれている場合、個々のコンポーネントアセンブリの「実際の」メタデータは、R2R セクション `ComponentAssemblies` を通じてアクセスされます。
 
-Currently shipping PE envelopes - both single-file and composite - can contain records for additional
-debug information in the debug directory. One such entry specific to R2R images is the one for R2R PerfMaps.
-The format of the auxiliary file is described [R2R perfmap format](./r2r-perfmap-format) and the corresponding
-debug directory entry is described in [PE COFF](https://github.com/dotnet/runtime/blob/main/design/specs/PE-COFF.md#r2r-perfmap-debug-directory-entry-type-21).
+**スタンドアロン MSIL ファイル**は、MSIL 埋め込みなしのコンポジット R2R 実行可能ファイルの IL とメタデータのソースとして使用されます。これらはコンポジット R2R 実行可能ファイルの隣の出力フォルダにコピーされ、コンパイラによって書き換えられ、所有者であるコンポジット R2R 実行可能ファイルへの転送情報 (セクション `OwnerCompositeExecutable`) を含む正式な ReadyToRun ヘッダーが付加されます。
 
-## Future Improvements
+::: tip 💡 初心者向け補足
+PE (Portable Executable) は Windows で使われる実行可能ファイルのフォーマットで、.exe や .dll ファイルの構造を定義します。CLI (Common Language Infrastructure) は .NET の実行基盤であり、ECMA-335 規格で定義されています。R2R イメージはこの PE/CLI フォーマットの上に、事前コンパイルされたネイティブコードの情報を追加する形で構成されています。
+:::
 
-The limitations of the current format are:
+# デバッグディレクトリへの追加
 
-- **Type loading from IL metadata**: All types are built from IL metadata at runtime currently.
-  It is bloating the size - prevents stripping full metadata from the image, and fragile -
-  assumes fixed field layout algorithm. A new section with compact type layout description
-  optimized for runtime type loading is needed to address it. (Similar concept as CTL.)
+現在出荷されている PE エンベロープ（単一ファイルおよびコンポジットの両方）には、デバッグディレクトリに追加のデバッグ情報のレコードを含めることができます。R2R イメージに固有のエントリの一つとして、R2R PerfMap 用のものがあります。
+補助ファイルのフォーマットは [R2R perfmap フォーマット](./r2r-perfmap-format)に記述されており、対応するデバッグディレクトリエントリは [PE COFF](https://github.com/dotnet/runtime/blob/main/design/specs/PE-COFF.md#r2r-perfmap-debug-directory-entry-type-21) に記述されています。
 
-- **Debug info size**: The debug information is unnecessarily bloating the image. This solution was
-  chosen for compatibility with the current desktop/CoreCLR debugging pipeline. Ideally, the
-  debug information should be stored in separate file.
+## 将来の改善点
 
-# Structures
+現在のフォーマットには以下の制限があります:
 
-The structures and accompanying constants are defined in the
-[readytorun.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/readytorun.h)
-header file.
-Basically the entire R2R executable image is addressed through the READYTORUN_HEADER singleton
-pointed to by the well-known export RTR_HEADER in the export section of the native executable
-envelope.
+- **IL メタデータからの型ロード**: 現在、すべての型は実行時に IL メタデータから構築されます。
+  これはサイズを肥大化させ（イメージからの完全なメタデータの除去を妨げ）、脆弱性があります（固定のフィールドレイアウトアルゴリズムを前提としています）。ランタイムの型ロードに最適化されたコンパクトな型レイアウト記述を持つ新しいセクションが必要です（CTL と類似の概念）。
 
-For single-file R2R executables, there's just one header representing all image sections.
-For composite and single exe, the global `READYTORUN_HEADER` includes a section of the type
-`ComponentAssemblies` representing the component assemblies comprising the composite
-R2R image. This table is parallel to (it used the same indexing as) the table
-`READYTORUN_MANIFEST_METADATA`. Each `READYTORUN_SECTION_ASSEMBLIES_ENTRY` record points
-to a `READYTORUN_CORE_HEADER` variable-length structure representing sections specific to the
-particular assembly.
+- **デバッグ情報のサイズ**: デバッグ情報がイメージを不必要に肥大化させています。このソリューションは、現在のデスクトップ/CoreCLR デバッグパイプラインとの互換性のために選択されました。理想的には、デバッグ情報は別ファイルに保存されるべきです。
+
+# 構造体
+
+構造体および付随する定数は、[readytorun.h](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/readytorun.h) ヘッダーファイルで定義されています。
+基本的に、R2R 実行可能イメージ全体は、ネイティブ実行可能エンベロープのエクスポートセクションにあるよく知られたエクスポート RTR_HEADER が指す READYTORUN_HEADER シングルトン (singleton) を通じてアドレスされます。
+
+単一ファイル R2R 実行可能ファイルの場合、すべてのイメージセクションを表す 1 つのヘッダーのみが存在します。
+コンポジットおよびシングル exe の場合、グローバルな `READYTORUN_HEADER` には、コンポジット R2R イメージを構成するコンポーネントアセンブリを表す `ComponentAssemblies` 型のセクションが含まれます。このテーブルは `READYTORUN_MANIFEST_METADATA` テーブルと並列（同じインデックスを使用）です。各 `READYTORUN_SECTION_ASSEMBLIES_ENTRY` レコードは、特定のアセンブリに固有のセクションを表す `READYTORUN_CORE_HEADER` 可変長構造体を指します。
 
 ## READYTORUN_HEADER
 
@@ -100,17 +79,17 @@ struct READYTORUN_HEADER
 
 ### READYTORUN_HEADER::Signature
 
-Always set to 0x00525452 (ASCII encoding for RTR). The signature can be used to distinguish
-ReadyToRun images from other CLI images with ManagedNativeHeader (e.g. NGen images).
+常に 0x00525452 に設定されます（RTR の ASCII エンコーディング）。このシグネチャは、ReadyToRun イメージを ManagedNativeHeader を持つ他の CLI イメージ（例: NGen イメージ）と区別するために使用できます。
 
 ### READYTORUN_HEADER::MajorVersion/MinorVersion
 
-The current format version is 3.1. MajorVersion increments are meant for file format breaking changes.
-MinorVersion increments are meant to compatible file format changes.
+現在のフォーマットバージョンは 3.1 です。MajorVersion の増加はファイルフォーマットの破壊的変更を意味します。MinorVersion の増加は互換性のあるファイルフォーマット変更を意味します。
 
-**Example**: Assume the highest version supported by the runtime is 2.3. The runtime should be able to
-successfully execute native code from images of version 2.9. The runtime should refuse to execute
-native code from image of version 3.0.
+**例**: ランタイムがサポートする最高バージョンが 2.3 であると仮定します。ランタイムはバージョン 2.9 のイメージからネイティブコードを正常に実行できるべきです。ランタイムはバージョン 3.0 のイメージからネイティブコードを実行することを拒否すべきです。
+
+::: tip 💡 初心者向け補足
+バージョン管理の考え方は一般的なセマンティックバージョニング (Semantic Versioning) に似ています。メジャーバージョンが同じであれば後方互換性が保たれ、マイナーバージョンが高いイメージでも実行できます。しかし、メジャーバージョンが異なると互換性がなくなります。
+:::
 
 ## READYTORUN_CORE_HEADER
 
@@ -128,17 +107,17 @@ struct READYTORUN_CORE_HEADER
 
 ### READYTORUN_CORE_HEADER::Flags
 
-| Flag                                       |      Value | Description
-|:-------------------------------------------|-----------:|:-----------
-| READYTORUN_FLAG_PLATFORM_NEUTRAL_SOURCE    | 0x00000001 | Set if the original IL image was platform neutral. The platform neutrality is part of assembly name. This flag can be used to reconstruct the full original assembly name.
-| READYTORUN_FLAG_COMPOSITE                  | 0x00000002 | The image represents a composite R2R file resulting from a combined compilation of a larger number of input MSIL assemblies.
+| フラグ                                     |         値 | 説明                                                                                                                                                                                   |
+| :----------------------------------------- | ---------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| READYTORUN_FLAG_PLATFORM_NEUTRAL_SOURCE    | 0x00000001 | 元の IL イメージがプラットフォーム中立であった場合に設定されます。プラットフォーム中立性はアセンブリ名の一部です。このフラグは、元の完全なアセンブリ名を再構築するために使用できます。 |
+| READYTORUN_FLAG_COMPOSITE                  | 0x00000002 | イメージが、多数の入力 MSIL アセンブリの結合コンパイルの結果であるコンポジット R2R ファイルを表します。                                                                                |
 | READYTORUN_FLAG_PARTIAL                    | 0x00000004 |
-| READYTORUN_FLAG_NONSHARED_PINVOKE_STUBS    | 0x00000008 | PInvoke stubs compiled into image are non-shareable (no secret parameter)
-| READYTORUN_FLAG_EMBEDDED_MSIL              | 0x00000010 | Input MSIL is embedded in the R2R image.
-| READYTORUN_FLAG_COMPONENT                  | 0x00000020 | This is a component assembly of a composite R2R image
-| READYTORUN_FLAG_MULTIMODULE_VERSION_BUBBLE | 0x00000040 | This R2R module has multiple modules within its version bubble (For versions before version 6.3, all modules are assumed to possibly have this characteristic)
-| READYTORUN_FLAG_UNRELATED_R2R_CODE         | 0x00000080 | This R2R module has code in it that would not be naturally encoded into this module
-| READYTORUN_FLAG_PLATFORM_NATIVE_IMAGE      | 0x00000100 | The owning composite executable is in the platform native format
+| READYTORUN_FLAG_NONSHARED_PINVOKE_STUBS    | 0x00000008 | イメージにコンパイルされた PInvoke スタブは共有不可です（シークレットパラメータなし）。                                                                                                |
+| READYTORUN_FLAG_EMBEDDED_MSIL              | 0x00000010 | 入力 MSIL が R2R イメージに埋め込まれています。                                                                                                                                        |
+| READYTORUN_FLAG_COMPONENT                  | 0x00000020 | これはコンポジット R2R イメージのコンポーネントアセンブリです。                                                                                                                        |
+| READYTORUN_FLAG_MULTIMODULE_VERSION_BUBBLE | 0x00000040 | この R2R モジュールには、バージョンバブル (version bubble) 内に複数のモジュールがあります（バージョン 6.3 より前では、すべてのモジュールがこの特性を持つ可能性があると仮定されます）。 |
+| READYTORUN_FLAG_UNRELATED_R2R_CODE         | 0x00000080 | この R2R モジュールには、このモジュールに自然にエンコードされないコードが含まれています。                                                                                              |
+| READYTORUN_FLAG_PLATFORM_NATIVE_IMAGE      | 0x00000100 | 所有するコンポジット実行可能ファイルがプラットフォームネイティブフォーマットです。                                                                                                     |
 
 ## READYTORUN_SECTION
 
@@ -150,56 +129,48 @@ struct READYTORUN_SECTION
 };
 ```
 
-The `READYTORUN_CORE_HEADER` structure is immediately followed by an array of `READYTORUN_SECTION` records
-representing the individual R2R sections. Number of elements in the array is `READYTORUN_HEADER::NumberOfSections`.
-Each record contains section type and its location within the binary. The array is sorted by section type
-to allow binary searching.
+`READYTORUN_CORE_HEADER` 構造体の直後に `READYTORUN_SECTION` レコードの配列が続き、個々の R2R セクションを表します。配列の要素数は `READYTORUN_HEADER::NumberOfSections` です。各レコードはセクションタイプとバイナリ内のその位置を含みます。配列はバイナリサーチ (binary search) を可能にするためにセクションタイプでソートされています。
 
-This setup allows adding new or optional section types, and obsoleting existing section types, without
-file format breaking changes. The runtime is not required to understand all section types in order to load
-and execute the ready to run file.
+このセットアップにより、ファイルフォーマットの破壊的変更なしに、新しいまたはオプションのセクションタイプを追加したり、既存のセクションタイプを廃止したりできます。ランタイムは、ReadyToRun ファイルをロードして実行するために、すべてのセクションタイプを理解する必要はありません。
 
-The following section types are defined and described later in this document:
+以下のセクションタイプが定義されており、本ドキュメントの後半で説明されます:
 
-| ReadyToRunSectionType     | Value | Scope (component assembly / entire image)
-|:--------------------------|------:|:-----------
-| CompilerIdentifier        |   100 | Image
-| ImportSections            |   101 | Image
-| RuntimeFunctions          |   102 | Image
-| MethodDefEntryPoints      |   103 | Assembly
-| ExceptionInfo             |   104 | Assembly
-| DebugInfo                 |   105 | Assembly
-| DelayLoadMethodCallThunks |   106 | Assembly
-| ~~AvailableTypes~~        |   107 | (obsolete - used by an older format)
-| AvailableTypes            |   108 | Assembly
-| InstanceMethodEntryPoints |   109 | Image
-| InliningInfo              |   110 | Assembly (added in V2.1)
-| ProfileDataInfo           |   111 | Image (added in V2.2)
-| ManifestMetadata          |   112 | Image (added in V2.3)
-| AttributePresence         |   113 | Assembly (added in V3.1)
-| InliningInfo2             |   114 | Image (added in V4.1)
-| ComponentAssemblies       |   115 | Image (added in V4.1)
-| OwnerCompositeExecutable  |   116 | Image (added in V4.1)
-| PgoInstrumentationData    |   117 | Image (added in V5.2)
-| ManifestAssemblyMvids     |   118 | Image (added in V5.3)
-| CrossModuleInlineInfo     |   119 | Image (added in V6.3)
-| HotColdMap                |   120 | Image (added in V8.0)
-| MethodIsGenericMap        |   121 | Assembly (Added in V9.0)
-| EnclosingTypeMap          |   122 | Assembly (Added in V9.0)
-| TypeGenericInfoMap        |   123 | Assembly (Added in V9.0)
+| ReadyToRunSectionType     |  値 | スコープ (コンポーネントアセンブリ / イメージ全体) |
+| :------------------------ | --: | :------------------------------------------------- |
+| CompilerIdentifier        | 100 | イメージ                                           |
+| ImportSections            | 101 | イメージ                                           |
+| RuntimeFunctions          | 102 | イメージ                                           |
+| MethodDefEntryPoints      | 103 | アセンブリ                                         |
+| ExceptionInfo             | 104 | アセンブリ                                         |
+| DebugInfo                 | 105 | アセンブリ                                         |
+| DelayLoadMethodCallThunks | 106 | アセンブリ                                         |
+| ~~AvailableTypes~~        | 107 | (廃止 - 古いフォーマットで使用)                    |
+| AvailableTypes            | 108 | アセンブリ                                         |
+| InstanceMethodEntryPoints | 109 | イメージ                                           |
+| InliningInfo              | 110 | アセンブリ (V2.1 で追加)                           |
+| ProfileDataInfo           | 111 | イメージ (V2.2 で追加)                             |
+| ManifestMetadata          | 112 | イメージ (V2.3 で追加)                             |
+| AttributePresence         | 113 | アセンブリ (V3.1 で追加)                           |
+| InliningInfo2             | 114 | イメージ (V4.1 で追加)                             |
+| ComponentAssemblies       | 115 | イメージ (V4.1 で追加)                             |
+| OwnerCompositeExecutable  | 116 | イメージ (V4.1 で追加)                             |
+| PgoInstrumentationData    | 117 | イメージ (V5.2 で追加)                             |
+| ManifestAssemblyMvids     | 118 | イメージ (V5.3 で追加)                             |
+| CrossModuleInlineInfo     | 119 | イメージ (V6.3 で追加)                             |
+| HotColdMap                | 120 | イメージ (V8.0 で追加)                             |
+| MethodIsGenericMap        | 121 | アセンブリ (V9.0 で追加)                           |
+| EnclosingTypeMap          | 122 | アセンブリ (V9.0 で追加)                           |
+| TypeGenericInfoMap        | 123 | アセンブリ (V9.0 で追加)                           |
 
 ## ReadyToRunSectionType.CompilerIdentifier
 
-This section contains zero terminated ASCII string that identifies the compiler used to produce the
-image.
+このセクションには、イメージの生成に使用されたコンパイラを識別するゼロ終端 ASCII 文字列が含まれます。
 
-**Example**: `CoreCLR 4.6.22727.0 PROJECTK`
+**例**: `CoreCLR 4.6.22727.0 PROJECTK`
 
 ## ReadyToRunSectionType.ImportSections
 
-This section contains array of READYTORUN_IMPORT_SECTION structures. Each entry describes range of
-slots that had to be filled with the value from outside the module (typically lazily). The initial values of
-slots in each range are either zero or pointers to lazy initialization helper.
+このセクションには READYTORUN_IMPORT_SECTION 構造体の配列が含まれます。各エントリは、モジュール外部からの値で埋める必要があったスロットの範囲を記述します（通常は遅延処理）。各範囲のスロットの初期値は、ゼロまたは遅延初期化ヘルパーへのポインタです。
 
 ```C++
 struct READYTORUN_IMPORT_SECTION
@@ -215,194 +186,180 @@ struct READYTORUN_IMPORT_SECTION
 
 ### READYTORUN_IMPORT_SECTIONS::Flags
 
-| ReadyToRunImportSectionFlags           | Value  | Description
-|:---------------------------------------|-------:|:-----------
-| ReadyToRunImportSectionFlags::None     | 0x0000  | None
-| ReadyToRunImportSectionFlags::Eager    | 0x0001 | Set if the slots in the section have to be initialized at image load time. It is used to avoid lazy initialization when it cannot be done or when it would have undesirable reliability or performance effects (unexpected failure or GC trigger points, overhead of lazy initialization).
-| ReadyToRunImportSectionFlags::PCode    | 0x0004  | Section contains pointers to code
-
+| ReadyToRunImportSectionFlags        |     値 | 説明                                                                                                                                                                                                                                                                                     |
+| :---------------------------------- | -----: | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ReadyToRunImportSectionFlags::None  | 0x0000 | なし                                                                                                                                                                                                                                                                                     |
+| ReadyToRunImportSectionFlags::Eager | 0x0001 | セクション内のスロットがイメージロード時に初期化される必要がある場合に設定されます。遅延初期化ができない場合、または望ましくない信頼性やパフォーマンスへの影響（予期しない障害や GC トリガーポイント、遅延初期化のオーバーヘッド）がある場合に、遅延初期化を回避するために使用されます。 |
+| ReadyToRunImportSectionFlags::PCode | 0x0004 | セクションにコードへのポインタが含まれます                                                                                                                                                                                                                                               |
 
 ### READYTORUN_IMPORT_SECTIONS::Type
 
-| ReadyToRunImportSectionType                 | Value  | Description
-|:--------------------------------------------|-------:|:-----------
-| ReadyToRunImportSectionType::Unknown      | 0      | The type of slots in this section is unspecified.
-| ReadyToRunImportSectionType::StubDispatch | 2      | The type of slots in this section rely on stubs for dispatch.
-| ReadyToRunImportSectionType::StringHandle | 3      | The type of slots in this section hold strings
-| ReadyToRunImportSectionType::ILBodyFixups | 7      | The type of slots in this section represent cross module IL bodies
+| ReadyToRunImportSectionType               |  値 | 説明                                                               |
+| :---------------------------------------- | --: | :----------------------------------------------------------------- |
+| ReadyToRunImportSectionType::Unknown      |   0 | このセクション内のスロットのタイプは未指定です。                   |
+| ReadyToRunImportSectionType::StubDispatch |   2 | このセクション内のスロットはディスパッチにスタブを利用します。     |
+| ReadyToRunImportSectionType::StringHandle |   3 | このセクション内のスロットは文字列を保持します。                   |
+| ReadyToRunImportSectionType::ILBodyFixups |   7 | このセクション内のスロットはクロスモジュール IL ボディを表します。 |
 
-*Future*: The section type can be used to group slots of the same type together. For example, all virtual
-stub dispatch slots may be grouped together to simplify resetting of virtual stub dispatch cells into their
-initial state.
+_将来_: セクションタイプは、同じタイプのスロットをグループ化するために使用できます。たとえば、すべての仮想スタブディスパッチ (virtual stub dispatch) スロットをグループ化して、仮想スタブディスパッチセルを初期状態にリセットすることを簡素化できます。
 
 ### READYTORUN_IMPORT_SECTIONS::Signatures
 
-This field points to array of RVAs that is parallel with the array of slots. Each RVA points to fixup
-signature that contains the information required to fill the corresponding slot. The signature encoding
-builds upon the encoding used for signatures in ECMA-335. The first element of the signature describes the
-fixup kind, the rest of the signature varies based on the fixup kind.
+このフィールドは、スロットの配列と並列な RVA の配列を指します。各 RVA は、対応するスロットを埋めるために必要な情報を含むフィックスアップシグネチャ (fixup signature) を指します。シグネチャのエンコーディングは、ECMA-335 のシグネチャに使用されるエンコーディングに基づいています。シグネチャの最初の要素はフィックスアップの種類を記述し、シグネチャの残りはフィックスアップの種類に基づいて異なります。
 
-| ReadyToRunFixupKind                      | Value | Description
-|:-----------------------------------------|------:|:-----------
-| READYTORUN_FIXUP_ThisObjDictionaryLookup |  0x07 | Generic lookup using `this`; followed by the type signature and by the method signature
-| READYTORUN_FIXUP_TypeDictionaryLookup    |  0x08 | Type-based generic lookup for methods on instantiated types; followed by the typespec signature
-| READYTORUN_FIXUP_MethodDictionaryLookup  |  0x09 | Generic method lookup; followed by the method spec signature
-| READYTORUN_FIXUP_TypeHandle              |  0x10 | Pointer uniquely identifying the type to the runtime, followed by typespec signature (see ECMA-335)
-| READYTORUN_FIXUP_MethodHandle            |  0x11 | Pointer uniquely identifying the method to the runtime, followed by method signature (see below)
-| READYTORUN_FIXUP_FieldHandle             |  0x12 | Pointer uniquely identifying the field to the runtime, followed by field signature (see below)
-| READYTORUN_FIXUP_MethodEntry             |  0x13 | Method entrypoint or call, followed by method signature
-| READYTORUN_FIXUP_MethodEntry_DefToken    |  0x14 | Method entrypoint or call, followed by methoddef token (shortcut)
-| READYTORUN_FIXUP_MethodEntry_RefToken    |  0x15 | Method entrypoint or call, followed by methodref token (shortcut)
-| READYTORUN_FIXUP_VirtualEntry            |  0x16 | Virtual method entrypoint or call, followed by method signature
-| READYTORUN_FIXUP_VirtualEntry_DefToken   |  0x17 | Virtual method entrypoint or call, followed by methoddef token (shortcut)
-| READYTORUN_FIXUP_VirtualEntry_RefToken   |  0x18 | Virtual method entrypoint or call, followed by methodref token (shortcut)
-| READYTORUN_FIXUP_VirtualEntry_Slot       |  0x19 | Virtual method entrypoint or call, followed by typespec signature and slot
-| READYTORUN_FIXUP_Helper                  |  0x1A | Helper call, followed by helper call id (see chapter 4 Helper calls)
-| READYTORUN_FIXUP_StringHandle            |  0x1B | String handle, followed by metadata string token
-| READYTORUN_FIXUP_NewObject               |  0x1C | New object helper, followed by typespec  signature
-| READYTORUN_FIXUP_NewArray                |  0x1D | New array helper, followed by typespec signature
-| READYTORUN_FIXUP_IsInstanceOf            |  0x1E | isinst helper, followed by typespec signature
-| READYTORUN_FIXUP_ChkCast                 |  0x1F | chkcast helper, followed by typespec signature
-| READYTORUN_FIXUP_FieldAddress            |  0x20 | Field address, followed by field signature
-| READYTORUN_FIXUP_CctorTrigger            |  0x21 | Static constructor trigger, followed by typespec signature
-| READYTORUN_FIXUP_StaticBaseNonGC         |  0x22 | Non-GC static base, followed by typespec signature
-| READYTORUN_FIXUP_StaticBaseGC            |  0x23 | GC static base, followed by typespec signature
-| READYTORUN_FIXUP_ThreadStaticBaseNonGC   |  0x24 | Non-GC thread-local static base, followed by typespec signature
-| READYTORUN_FIXUP_ThreadStaticBaseGC      |  0x25 | GC thread-local static base, followed by typespec signature
-| READYTORUN_FIXUP_FieldBaseOffset         |  0x26 | Starting offset of fields for given type, followed by typespec signature. Used to address base class fragility.
-| READYTORUN_FIXUP_FieldOffset             |  0x27 | Field offset, followed by field signature
-| READYTORUN_FIXUP_TypeDictionary          |  0x28 | Hidden dictionary argument for generic code, followed by typespec signature
-| READYTORUN_FIXUP_MethodDictionary        |  0x29 | Hidden dictionary argument for generic code, followed by method signature
-| READYTORUN_FIXUP_Check_TypeLayout        |  0x2A | Verification of type layout, followed by typespec and expected type layout descriptor
-| READYTORUN_FIXUP_Check_FieldOffset       |  0x2B | Verification of field offset, followed by field signature and expected field layout descriptor
-| READYTORUN_FIXUP_DelegateCtor            |  0x2C | Delegate constructor, followed by method signature
-| READYTORUN_FIXUP_DeclaringTypeHandle     |  0x2D | Dictionary lookup for method declaring type. Followed by the type signature.
-| READYTORUN_FIXUP_IndirectPInvokeTarget   |  0x2E | Target (indirect) of an inlined PInvoke. Followed by method signature.
-| READYTORUN_FIXUP_PInvokeTarget           |  0x2F | Target of an inlined PInvoke. Followed by method signature.
-| READYTORUN_FIXUP_Check_InstructionSetSupport | 0x30 | Specify the instruction sets that must be supported/unsupported to use the R2R code associated with the fixup.
-| READYTORUN_FIXUP_Verify_FieldOffset      | 0x31 | Generate a runtime check to ensure that the field offset matches between compile and runtime. Unlike CheckFieldOffset, this will generate a runtime exception on failure instead of silently dropping the method
-| READYTORUN_FIXUP_Verify_TypeLayout       | 0x32 | Generate a runtime check to ensure that the field offset matches between compile and runtime. Unlike CheckFieldOffset, this will generate a runtime exception on failure instead of silently dropping the method
-| READYTORUN_FIXUP_Check_VirtualFunctionOverride | 0x33 | Generate a runtime check to ensure that virtual function resolution has equivalent behavior at runtime as at compile time. If not equivalent, code will not be used. See [Virtual override signatures](#virtual-override-signatures) for details of the signature used.
-| READYTORUN_FIXUP_Verify_VirtualFunctionOverride | 0x34 | Generate a runtime check to ensure that virtual function resolution has equivalent behavior at runtime as at compile time. If not equivalent, generate runtime failure. See [Virtual override signatures](#virtual-override-signatures) for details of the signature used.
-| READYTORUN_FIXUP_Check_IL_Body           |  0x35 | Check to see if an IL method is defined the same at runtime as at compile time. A failed match will cause code not to be used. See[IL Body signatures](#il-body-signatures) for details.
-| READYTORUN_FIXUP_Verify_IL_Body          |  0x36 | Verify an IL body is defined the same at compile time and runtime. A failed match will cause a hard runtime failure. See[IL Body signatures](#il-body-signatures) for details.
-| READYTORUN_FIXUP_ModuleOverride          |  0x80 | When or-ed to the fixup ID, the fixup byte in the signature is followed by an encoded uint with assemblyref index, either within the MSIL metadata of the master context module for the signature or within the manifest metadata R2R header table (used in cases inlining brings in references to assemblies not seen in the input MSIL).
+::: tip 💡 初心者向け補足
+フィックスアップ (fixup) とは、コンパイル時に確定できないアドレスや参照を、実行時（ロード時）に解決して埋め込む処理のことです。たとえば、あるメソッドの実際のメモリアドレスはロード時まで分からないため、R2R イメージにはフィックスアップ情報が埋め込まれ、ランタイムがそれを解決します。これは、C/C++ のリンカにおけるリロケーション (relocation) に似た概念です。
+:::
 
-#### Method Signatures
+| ReadyToRunFixupKind                             |   値 | 説明                                                                                                                                                                                                                                                                                                                                                                   |
+| :---------------------------------------------- | ---: | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| READYTORUN_FIXUP_ThisObjDictionaryLookup        | 0x07 | `this` を使用したジェネリックルックアップ。型シグネチャとメソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                |
+| READYTORUN_FIXUP_TypeDictionaryLookup           | 0x08 | インスタンス化された型のメソッドに対する型ベースのジェネリックルックアップ。typespec シグネチャが続きます。                                                                                                                                                                                                                                                            |
+| READYTORUN_FIXUP_MethodDictionaryLookup         | 0x09 | ジェネリックメソッドルックアップ。method spec シグネチャが続きます。                                                                                                                                                                                                                                                                                                   |
+| READYTORUN_FIXUP_TypeHandle                     | 0x10 | ランタイムに対して型を一意に識別するポインタ。typespec シグネチャが続きます（ECMA-335 参照）。                                                                                                                                                                                                                                                                         |
+| READYTORUN_FIXUP_MethodHandle                   | 0x11 | ランタイムに対してメソッドを一意に識別するポインタ。メソッドシグネチャが続きます（以下参照）。                                                                                                                                                                                                                                                                         |
+| READYTORUN_FIXUP_FieldHandle                    | 0x12 | ランタイムに対してフィールドを一意に識別するポインタ。フィールドシグネチャが続きます（以下参照）。                                                                                                                                                                                                                                                                     |
+| READYTORUN_FIXUP_MethodEntry                    | 0x13 | メソッドエントリポイントまたは呼び出し。メソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                                 |
+| READYTORUN_FIXUP_MethodEntry_DefToken           | 0x14 | メソッドエントリポイントまたは呼び出し。methoddef トークンが続きます（ショートカット）。                                                                                                                                                                                                                                                                               |
+| READYTORUN_FIXUP_MethodEntry_RefToken           | 0x15 | メソッドエントリポイントまたは呼び出し。methodref トークンが続きます（ショートカット）。                                                                                                                                                                                                                                                                               |
+| READYTORUN_FIXUP_VirtualEntry                   | 0x16 | 仮想メソッドエントリポイントまたは呼び出し。メソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                             |
+| READYTORUN_FIXUP_VirtualEntry_DefToken          | 0x17 | 仮想メソッドエントリポイントまたは呼び出し。methoddef トークンが続きます（ショートカット）。                                                                                                                                                                                                                                                                           |
+| READYTORUN_FIXUP_VirtualEntry_RefToken          | 0x18 | 仮想メソッドエントリポイントまたは呼び出し。methodref トークンが続きます（ショートカット）。                                                                                                                                                                                                                                                                           |
+| READYTORUN_FIXUP_VirtualEntry_Slot              | 0x19 | 仮想メソッドエントリポイントまたは呼び出し。typespec シグネチャとスロットが続きます。                                                                                                                                                                                                                                                                                  |
+| READYTORUN_FIXUP_Helper                         | 0x1A | ヘルパー呼び出し。ヘルパー呼び出し ID が続きます（第4章「ヘルパー呼び出し」参照）。                                                                                                                                                                                                                                                                                    |
+| READYTORUN_FIXUP_StringHandle                   | 0x1B | 文字列ハンドル。メタデータ文字列トークンが続きます。                                                                                                                                                                                                                                                                                                                   |
+| READYTORUN_FIXUP_NewObject                      | 0x1C | 新規オブジェクトヘルパー。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                              |
+| READYTORUN_FIXUP_NewArray                       | 0x1D | 新規配列ヘルパー。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                                      |
+| READYTORUN_FIXUP_IsInstanceOf                   | 0x1E | isinst ヘルパー。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                                       |
+| READYTORUN_FIXUP_ChkCast                        | 0x1F | chkcast ヘルパー。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                                      |
+| READYTORUN_FIXUP_FieldAddress                   | 0x20 | フィールドアドレス。フィールドシグネチャが続きます。                                                                                                                                                                                                                                                                                                                   |
+| READYTORUN_FIXUP_CctorTrigger                   | 0x21 | 静的コンストラクタトリガー。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                            |
+| READYTORUN_FIXUP_StaticBaseNonGC                | 0x22 | 非 GC 静的ベース。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                                      |
+| READYTORUN_FIXUP_StaticBaseGC                   | 0x23 | GC 静的ベース。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                                         |
+| READYTORUN_FIXUP_ThreadStaticBaseNonGC          | 0x24 | 非 GC スレッドローカル静的ベース。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                      |
+| READYTORUN_FIXUP_ThreadStaticBaseGC             | 0x25 | GC スレッドローカル静的ベース。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                                         |
+| READYTORUN_FIXUP_FieldBaseOffset                | 0x26 | 指定された型のフィールドの開始オフセット。typespec シグネチャが続きます。基底クラスの脆弱性 (fragility) に対処するために使用されます。                                                                                                                                                                                                                                 |
+| READYTORUN_FIXUP_FieldOffset                    | 0x27 | フィールドオフセット。フィールドシグネチャが続きます。                                                                                                                                                                                                                                                                                                                 |
+| READYTORUN_FIXUP_TypeDictionary                 | 0x28 | ジェネリックコード用の隠しディクショナリ引数。typespec シグネチャが続きます。                                                                                                                                                                                                                                                                                          |
+| READYTORUN_FIXUP_MethodDictionary               | 0x29 | ジェネリックコード用の隠しディクショナリ引数。メソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                           |
+| READYTORUN_FIXUP_Check_TypeLayout               | 0x2A | 型レイアウトの検証。typespec と期待される型レイアウトディスクリプタ (descriptor) が続きます。                                                                                                                                                                                                                                                                          |
+| READYTORUN_FIXUP_Check_FieldOffset              | 0x2B | フィールドオフセットの検証。フィールドシグネチャと期待されるフィールドレイアウトディスクリプタが続きます。                                                                                                                                                                                                                                                             |
+| READYTORUN_FIXUP_DelegateCtor                   | 0x2C | デリゲートコンストラクタ。メソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                                               |
+| READYTORUN_FIXUP_DeclaringTypeHandle            | 0x2D | メソッド宣言型のディクショナリルックアップ。型シグネチャが続きます。                                                                                                                                                                                                                                                                                                   |
+| READYTORUN_FIXUP_IndirectPInvokeTarget          | 0x2E | インラインされた PInvoke のターゲット（間接）。メソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                          |
+| READYTORUN_FIXUP_PInvokeTarget                  | 0x2F | インラインされた PInvoke のターゲット。メソッドシグネチャが続きます。                                                                                                                                                                                                                                                                                                  |
+| READYTORUN_FIXUP_Check_InstructionSetSupport    | 0x30 | フィックスアップに関連付けられた R2R コードを使用するためにサポートされている必要がある/サポートされていない必要がある命令セットを指定します。                                                                                                                                                                                                                         |
+| READYTORUN_FIXUP_Verify_FieldOffset             | 0x31 | コンパイル時と実行時のフィールドオフセットが一致することを確認するランタイムチェックを生成します。CheckFieldOffset とは異なり、失敗時にメソッドを静かにドロップするのではなく、ランタイム例外を生成します。                                                                                                                                                            |
+| READYTORUN_FIXUP_Verify_TypeLayout              | 0x32 | コンパイル時と実行時のフィールドオフセットが一致することを確認するランタイムチェックを生成します。CheckFieldOffset とは異なり、失敗時にメソッドを静かにドロップするのではなく、ランタイム例外を生成します。                                                                                                                                                            |
+| READYTORUN_FIXUP_Check_VirtualFunctionOverride  | 0x33 | 仮想関数解決がコンパイル時と実行時で同等の動作をすることを確認するランタイムチェックを生成します。同等でない場合、コードは使用されません。使用されるシグネチャの詳細については[仮想オーバーライドシグネチャ](#仮想オーバーライドシグネチャ)を参照してください。                                                                                                        |
+| READYTORUN_FIXUP_Verify_VirtualFunctionOverride | 0x34 | 仮想関数解決がコンパイル時と実行時で同等の動作をすることを確認するランタイムチェックを生成します。同等でない場合、ランタイム障害を生成します。使用されるシグネチャの詳細については[仮想オーバーライドシグネチャ](#仮想オーバーライドシグネチャ)を参照してください。                                                                                                    |
+| READYTORUN_FIXUP_Check_IL_Body                  | 0x35 | IL メソッドが実行時にコンパイル時と同じように定義されているかを確認します。一致しない場合、コードは使用されません。詳細については [IL Body シグネチャ](#il-body-シグネチャ)を参照してください。                                                                                                                                                                        |
+| READYTORUN_FIXUP_Verify_IL_Body                 | 0x36 | IL ボディがコンパイル時と実行時で同じように定義されていることを検証します。一致しない場合、ハードなランタイム障害を引き起こします。詳細については [IL Body シグネチャ](#il-body-シグネチャ)を参照してください。                                                                                                                                                        |
+| READYTORUN_FIXUP_ModuleOverride                 | 0x80 | フィックスアップ ID と OR されると、シグネチャ内のフィックスアップバイトの後に、シグネチャのマスターコンテキストモジュールの MSIL メタデータ内、またはマニフェストメタデータ R2R ヘッダーテーブル内の assemblyref インデックスを持つエンコードされた uint が続きます（インライン化によって入力 MSIL に見られないアセンブリへの参照が持ち込まれる場合に使用されます）。 |
 
-MethodSpec signatures defined by ECMA-335 are not rich enough to describe method flavors
-referenced by native code. The first element of the method signature are flags. It is followed by method
-token, and additional data determined by the flags.
+#### メソッドシグネチャ
 
-| ReadyToRunMethodSigFlags                  | Value | Description
-|:------------------------------------------|------:|:-----------
-| READYTORUN_METHOD_SIG_UnboxingStub        |  0x01 | Unboxing entrypoint of the method.
-| READYTORUN_METHOD_SIG_InstantiatingStub   |  0x02 | Instantiating entrypoint of the method does not take hidden dictionary generic argument.
-| READYTORUN_METHOD_SIG_MethodInstantiation |  0x04 | Method instantitation. Number of instantiation arguments followed by typespec for each of them appended as additional data.
-| READYTORUN_METHOD_SIG_SlotInsteadOfToken  |  0x08 | If set, the token is slot number. Used for multidimensional array methods that do not have metadata token, and also as an optimization for stable interface methods. Cannot be combined with `MemberRefToken`.
-| READYTORUN_METHOD_SIG_MemberRefToken      |  0x10 | If set, the token is memberref token. If not set, the token is methoddef token.
-| READYTORUN_METHOD_SIG_Constrained         |  0x20 | Constrained type for method resolution. Typespec appended as additional data.
-| READYTORUN_METHOD_SIG_OwnerType           |  0x40 | Method type. Typespec appended as additional data.
-| READYTORUN_METHOD_SIG_UpdateContext       |  0x80 | If set, update the module which is used to parse tokens before performing any token processing. A uint index into the modules table immediately follows the flags
+ECMA-335 で定義されている MethodSpec シグネチャは、ネイティブコードが参照するメソッドフレーバー (flavor) を記述するのに十分な豊富さがありません。メソッドシグネチャの最初の要素はフラグです。その後にメソッドトークンと、フラグによって決定される追加データが続きます。
 
-#### Field Signatures
+| ReadyToRunMethodSigFlags                  |   値 | 説明                                                                                                                                                                                                                |
+| :---------------------------------------- | ---: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| READYTORUN_METHOD_SIG_UnboxingStub        | 0x01 | メソッドのアンボクシング (unboxing) エントリポイント。                                                                                                                                                              |
+| READYTORUN_METHOD_SIG_InstantiatingStub   | 0x02 | メソッドのインスタンス化エントリポイントで、隠しディクショナリジェネリック引数を取りません。                                                                                                                        |
+| READYTORUN_METHOD_SIG_MethodInstantiation | 0x04 | メソッドインスタンス化。インスタンス化引数の数と、それぞれの typespec が追加データとして付加されます。                                                                                                              |
+| READYTORUN_METHOD_SIG_SlotInsteadOfToken  | 0x08 | 設定されている場合、トークンはスロット番号です。メタデータトークンを持たない多次元配列メソッド、および安定したインターフェースメソッドの最適化として使用されます。`MemberRefToken` と組み合わせることはできません。 |
+| READYTORUN_METHOD_SIG_MemberRefToken      | 0x10 | 設定されている場合、トークンは memberref トークンです。設定されていない場合、トークンは methoddef トークンです。                                                                                                    |
+| READYTORUN_METHOD_SIG_Constrained         | 0x20 | メソッド解決のための制約型。typespec が追加データとして付加されます。                                                                                                                                               |
+| READYTORUN_METHOD_SIG_OwnerType           | 0x40 | メソッド型。typespec が追加データとして付加されます。                                                                                                                                                               |
+| READYTORUN_METHOD_SIG_UpdateContext       | 0x80 | 設定されている場合、トークン処理を実行する前にトークンの解析に使用されるモジュールを更新します。フラグの直後にモジュールテーブルへの uint インデックスが続きます。                                                  |
 
-ECMA-335 does not define field signatures that are rich enough to describe method flavors referenced
-by native code. The first element of the field signature are flags. It is followed by field token, and
-additional data determined by the flags.
+#### フィールドシグネチャ
 
-| ReadyToRunFieldSigFlags                  | Value | Description
-|:-----------------------------------------|------:|:-----------
-| READYTORUN_FIELD_SIG_IndexInsteadOfToken |  0x08 | Used as an optimization for stable fields. Cannot be combined with `MemberRefToken`.
-| READYTORUN_FIELD_SIG_MemberRefToken      |  0x10 | If set, the token is memberref token. If not set, the token is fielddef token.
-| READYTORUN_FIELD_SIG_OwnerType           |  0x40 | Field type. Typespec appended as additional data.
+ECMA-335 は、ネイティブコードが参照するメソッドフレーバーを記述するのに十分な豊富さを持つフィールドシグネチャを定義していません。フィールドシグネチャの最初の要素はフラグです。その後にフィールドトークンと、フラグによって決定される追加データが続きます。
 
-#### Virtual override signatures
+| ReadyToRunFieldSigFlags                  |   値 | 説明                                                                                                            |
+| :--------------------------------------- | ---: | :-------------------------------------------------------------------------------------------------------------- |
+| READYTORUN_FIELD_SIG_IndexInsteadOfToken | 0x08 | 安定したフィールドの最適化として使用されます。`MemberRefToken` と組み合わせることはできません。                 |
+| READYTORUN_FIELD_SIG_MemberRefToken      | 0x10 | 設定されている場合、トークンは memberref トークンです。設定されていない場合、トークンは fielddef トークンです。 |
+| READYTORUN_FIELD_SIG_OwnerType           | 0x40 | フィールド型。typespec が追加データとして付加されます。                                                         |
 
-ECMA 335 does not have a natural encoding for describing an overridden method. These signatures are encoded as a ReadyToRunVirtualFunctionOverrideFlags byte, followed by a method signature representing the declaration method, a type signature representing the type which is being devirtualized, and (optionally) a method signature indicating the implementation method.
+#### 仮想オーバーライドシグネチャ
 
-| ReadyToRunVirtualFunctionOverrideFlags                | Value | Description
-|:------------------------------------------------------|------:|:-----------
-| READYTORUN_VIRTUAL_OVERRIDE_None                      |  0x00 | No flags are set
-| READYTORUN_VIRTUAL_OVERRIDE_VirtualFunctionOverridden  |  0x01 | If set, then the virtual function has an implementation, which is encoded in the optional method implementation signature.
+ECMA 335 には、オーバーライドされたメソッドを記述するための自然なエンコーディングがありません。これらのシグネチャは、ReadyToRunVirtualFunctionOverrideFlags バイトとしてエンコードされ、その後に宣言メソッドを表すメソッドシグネチャ、脱仮想化 (devirtualize) される型を表す型シグネチャ、および（オプションとして）実装メソッドを示すメソッドシグネチャが続きます。
 
-#### IL Body signatures
+| ReadyToRunVirtualFunctionOverrideFlags                |   値 | 説明                                                                                                     |
+| :---------------------------------------------------- | ---: | :------------------------------------------------------------------------------------------------------- |
+| READYTORUN_VIRTUAL_OVERRIDE_None                      | 0x00 | フラグは設定されていません。                                                                             |
+| READYTORUN_VIRTUAL_OVERRIDE_VirtualFunctionOverridden | 0x01 | 設定されている場合、仮想関数には実装があり、オプションのメソッド実装シグネチャにエンコードされています。 |
 
-ECMA 335 does not define a format that can represent the exact implementation of a method by itself. This signature holds all of the IL of the method, the EH table, the locals table, and each token (other than type references) in those tables is replaced with an index into a local stream of signatures. Those signatures are simply verbatim copies of the needed metadata to describe MemberRefs, TypeSpecs, MethodSpecs, StandaloneSignatures and strings. All of that is bundled into a large byte array. In addition, a series of TypeSignatures follows which allow the type references to be resolved, as well as a methodreference to the uninstantiated method. Assuming all of this matches with the data that is present at runtime, the fixup is considered to be satisfied. See ReadyToRunStandaloneMetadata.cs for the exact details of the format.
+#### IL Body シグネチャ
+
+ECMA 335 は、メソッドの正確な実装をそれ自体で表現できるフォーマットを定義していません。このシグネチャは、メソッドのすべての IL、EH テーブル、ローカル変数テーブルを保持し、それらのテーブル内の各トークン（型参照を除く）は、ローカルシグネチャストリームへのインデックスに置き換えられます。これらのシグネチャは、MemberRef、TypeSpec、MethodSpec、StandaloneSignature、および文字列を記述するために必要なメタデータのそのままのコピーです。これらすべてが大きなバイト配列にバンドルされます。さらに、型参照を解決するための一連の TypeSignature と、インスタンス化されていないメソッドへのメソッド参照が続きます。これらすべてが実行時に存在するデータと一致する場合、フィックスアップは満たされたと見なされます。フォーマットの正確な詳細については ReadyToRunStandaloneMetadata.cs を参照してください。
 
 ### READYTORUN_IMPORT_SECTIONS::AuxiliaryData
 
-For slots resolved lazily via `READYTORUN_HELPER_DelayLoad_MethodCall` helper, auxiliary data are
-compressed argument maps that allow precise GC stack scanning while the helper is running. The CoreCLR runtime class [`GCRefMapDecoder`](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/inc/gcrefmap.h#L158) is used to parse this information. This data would not be required for runtimes that allow conservative stack scanning.
+`READYTORUN_HELPER_DelayLoad_MethodCall` ヘルパーを通じて遅延解決されるスロットの場合、補助データ (auxiliary data) は、ヘルパーの実行中に正確な GC スタックスキャンを可能にする圧縮された引数マップです。CoreCLR ランタイムクラス [`GCRefMapDecoder`](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/inc/gcrefmap.h#L158) がこの情報の解析に使用されます。このデータは、保守的なスタックスキャンを許可するランタイムでは必要ありません。
 
-The auxiliary data table contains the exact same number of GC ref map records as there are method entries in the import section. To accelerate GC ref map lookup, the auxiliary data section starts with a lookup table holding the offset of every 1024-th method in the runtime function table within the linearized GC ref map.
+補助データテーブルには、インポートセクション内のメソッドエントリと正確に同じ数の GC 参照マップレコードが含まれます。GC 参照マップの検索を高速化するために、補助データセクションはランタイム関数テーブル内の 1024 番目ごとのメソッドの線形化された GC 参照マップ内のオフセットを保持するルックアップテーブルで始まります。
 
-|     Offset in auxiliary data | Size | Content
-|-----------------------------:|-----:|:-------
-|                            0 |    4 | Offset to GC ref map info for method #0 relative to this byte i.e. 4 * (MethodCount / 1024 + 1)
-|                            4 |    4 | Offset to GC ref map info for method #1024
-|                            8 |    4 | Offset to GC ref map info for method #2048
-|                          ... |      |
-| 4 * (MethodCount / 1024 + 1) |  ... | Serialized GC ref map info
+|      補助データ内のオフセット | サイズ | 内容                                                                                                         |
+| ----------------------------: | -----: | :----------------------------------------------------------------------------------------------------------- |
+|                             0 |      4 | メソッド #0 の GC 参照マップ情報へのこのバイトからの相対オフセット（すなわち 4 \* (MethodCount / 1024 + 1)） |
+|                             4 |      4 | メソッド #1024 の GC 参照マップ情報へのオフセット                                                            |
+|                             8 |      4 | メソッド #2048 の GC 参照マップ情報へのオフセット                                                            |
+|                           ... |        |
+| 4 \* (MethodCount / 1024 + 1) |    ... | シリアライズされた GC 参照マップ情報                                                                         |
 
-The GCRef map is used to encode GC type of arguments for callsites. Logically, it is a sequence `<pos, token>` where `pos` is
-position of the reference in the stack frame and `token` is type of GC reference (one of [`GCREFMAP_XXX`](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/inc/corcompile.h#L633) values):
+GC 参照マップは、呼び出しサイトの引数の GC 型をエンコードするために使用されます。論理的には、`<pos, token>` のシーケンスであり、`pos` はスタックフレーム内の参照の位置、`token` は GC 参照の型（[`GCREFMAP_XXX`](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/inc/corcompile.h#L633) 値のいずれか）です:
 
-| CORCOMPILE_GCREFMAP_TOKENS | Value | Stack frame entry interpretation
-|:---------------------------|------:|:--------------------------------
-| GCREFMAP_SKIP              |     0 | Not a GC-relevant entry
-| GCREFMAP_REF               |     1 | GC reference
-| GCREFMAP_INTERIOR          |     2 | Pointer to a GC reference
-| GCREFMAP_METHOD_PARAM      |     3 | Hidden method instantiation argument to generic method
-| GCREFMAP_TYPE_PARAM        |     4 | Hidden type instantiation argument to generic method
-| GCREFMAP_VASIG_COOKIE      |     5 | VARARG signature cookie
+| CORCOMPILE_GCREFMAP_TOKENS |  値 | スタックフレームエントリの解釈                         |
+| :------------------------- | --: | :----------------------------------------------------- |
+| GCREFMAP_SKIP              |   0 | GC に関連しないエントリ                                |
+| GCREFMAP_REF               |   1 | GC 参照                                                |
+| GCREFMAP_INTERIOR          |   2 | GC 参照へのポインタ                                    |
+| GCREFMAP_METHOD_PARAM      |   3 | ジェネリックメソッドへの隠しメソッドインスタンス化引数 |
+| GCREFMAP_TYPE_PARAM        |   4 | ジェネリックメソッドへの隠し型インスタンス化引数       |
+| GCREFMAP_VASIG_COOKIE      |   5 | VARARG シグネチャクッキー                              |
 
-The position values are calculated in `size_t` aka `IntPtr` units (4 bytes for 32-bit architectures vs. 8 bytes for 64-bit architectures) starting at the first position in the transition frame that may contain GC references. For all architectures except for **arm64** this is the beginning of the array of spilled argument registers. On arm64 it is the offset of the `X8` register used to pass the location to be filled in with the return value by the called method.
+位置の値は、`size_t`（`IntPtr`）単位（32 ビットアーキテクチャでは 4 バイト、64 ビットアーキテクチャでは 8 バイト）で、GC 参照を含む可能性のあるトランジションフレームの最初の位置から計算されます。**arm64** を除くすべてのアーキテクチャでは、これはスピルされた引数レジスタの配列の先頭です。arm64 では、呼び出されたメソッドによって戻り値を格納する場所を渡すために使用される `X8` レジスタのオフセットです。
 
-* The encoding always starts at the byte boundary. The high order bit of each byte is used to signal end of the encoding stream. The last byte has the high order bit zero. It means that there are 7 useful bits in each byte.
+- エンコーディングは常にバイト境界から開始します。各バイトの最上位ビットは、エンコーディングストリームの終了を示すために使用されます。最後のバイトの最上位ビットはゼロです。つまり、各バイトには 7 つの有効ビットがあります。
 
-* "pos" is always encoded as delta from previous pos.
+- "pos" は常に前の pos からのデルタとしてエンコードされます。
 
-* The basic encoding unit is two bits. Values 0, 1 and 2 are the common constructs (skip single slot, GC reference, interior pointer). Value 3 means that extended encoding follows.
+- 基本エンコーディング単位は 2 ビットです。値 0、1、2 は一般的な構成（単一スロットのスキップ、GC 参照、内部ポインタ）です。値 3 は拡張エンコーディングが続くことを意味します。
 
-* The extended information is integer encoded in one or more four bit blocks. The high order bit of the four bit block is used to signal the end.
+- 拡張情報は、1 つ以上の 4 ビットブロックで整数エンコードされます。4 ビットブロックの最上位ビットは終了を示すために使用されます。
 
-* For x86, the encoding starts with size of the callee popped stack. The size is encoded using the same mechanism as above (two bit
-basic encoding, with extended encoding for large values).
+- x86 の場合、エンコーディングは呼び出し先がポップするスタックのサイズから始まります。サイズは上記と同じメカニズム（2 ビットの基本エンコーディングと、大きな値のための拡張エンコーディング）を使用してエンコードされます。
 
 ## ReadyToRunSectionType.RuntimeFunctions
 
-This section contains sorted array of `RUNTIME_FUNCTION` entries that describe all code blocks in the image with pointers to their unwind info.
-Despite the name, these code block might represent a method body, or it could be just a part of it (e.g. a funclet) that requires its own unwind data.
-The standard Windows xdata/pdata format is used.
-ARM format is used for x86 to compensate for the lack of x86 unwind info standard.
-The unwind info blob is immediately followed by the GC info blob. The encoding slightly differs for amd64
-which encodes an extra 4-byte representing the end RVA of the unwind info blob.
+このセクションには、イメージ内のすべてのコードブロックをアンワインド情報 (unwind info) へのポインタとともに記述する `RUNTIME_FUNCTION` エントリのソート済み配列が含まれます。
+名前にもかかわらず、これらのコードブロックはメソッドボディを表す場合もあれば、独自のアンワインドデータを必要とするその一部（例: ファンクレット (funclet)）のみを表す場合もあります。
+標準の Windows xdata/pdata フォーマットが使用されます。
+x86 アンワインド情報の標準がないことを補うために、x86 では ARM フォーマットが使用されます。
+アンワインド情報ブロブ (blob) の直後に GC 情報ブロブが続きます。amd64 ではエンコーディングがわずかに異なり、アンワインド情報ブロブの終了 RVA を表す追加の 4 バイトがエンコードされます。
 
-### RUNTIME_FUNCTION (x86, arm, arm64, size = 8 bytes)
+### RUNTIME_FUNCTION (x86, arm, arm64, サイズ = 8 バイト)
 
-| Offset | Size | Value
-|-------:|-----:|:-----
-|      0 |    4 | Unwind info start RVA
-|      4 |    4 | GC info start RVA
+| オフセット | サイズ | 値                       |
+| ---------: | -----: | :----------------------- |
+|          0 |      4 | アンワインド情報開始 RVA |
+|          4 |      4 | GC 情報開始 RVA          |
 
-### RUNTIME_FUNCTION (amd64, size = 12 bytes)
+### RUNTIME_FUNCTION (amd64, サイズ = 12 バイト)
 
-| Offset | Size | Value
-|-------:|-----:|:-----
-|      0 |    4 | Unwind info start RVA
-|      4 |    4 | Unwind info end RVA (1 plus RVA of last byte)
-|      8 |    4 | GC info start RVA
+| オフセット | サイズ | 値                                                 |
+| ---------: | -----: | :------------------------------------------------- |
+|          0 |      4 | アンワインド情報開始 RVA                           |
+|          4 |      4 | アンワインド情報終了 RVA（最後のバイトの RVA + 1） |
+|          8 |      4 | GC 情報開始 RVA                                    |
 
 ## ReadyToRunSectionType.MethodDefEntryPoints
 
-This section contains a native format sparse array (see 4 Native Format) that maps methoddef rows to
-method entrypoints. Methoddef is used as index into the array. The element of the array is index of the
-method in `RuntimeFunctions`, followed by list of slots that need to be filled before the method
-can start executing.
+このセクションには、methoddef 行をメソッドエントリポイントにマッピングするネイティブフォーマットスパース配列 (sparse array)（第4章「ネイティブフォーマット」参照）が含まれます。methoddef が配列のインデックスとして使用されます。配列の要素は `RuntimeFunctions` 内のメソッドのインデックスであり、メソッドが実行を開始する前に埋める必要があるスロットのリストが続きます。
 
-The index of the method is left-shifted by 1 bit with the low bit indicating whether a list of slots
-to fix up follows. The list of slots is encoded as follows (same encoding as used by NGen):
+メソッドのインデックスは左に 1 ビットシフトされ、下位ビットがフィックスアップすべきスロットのリストが続くかどうかを示します。スロットのリストは以下のようにエンコードされます（NGen で使用されるのと同じエンコーディング）:
 
 ```
 READYTORUN_IMPORT_SECTIONS absolute index
@@ -426,25 +383,17 @@ READYTORUN_IMPORT_SECTIONS index delta
 0
 ```
 
-The fixup list is a stream of integers encoded as nibbles (1 nibble = 4 bits). 3 bits of a nibble are used to
-store 3 bits of the value, and the top bit indicates if the following nibble contains rest of the value. If the
-top bit in the nibble is set, then the value continues in the next nibble.
+フィックスアップリストは、ニブル (nibble)（1 ニブル = 4 ビット）としてエンコードされた整数のストリームです。ニブルの 3 ビットは値の 3 ビットを格納するために使用され、最上位ビットは次のニブルに値の残りが含まれるかどうかを示します。ニブルの最上位ビットが設定されている場合、値は次のニブルに続きます。
 
-The section and slot indices are delta-encoded offsets from that initial absolute index.  Delta-encoded
-means that the i-th value is the sum of values [1..i].
+セクションインデックスとスロットインデックスは、初期の絶対インデックスからのデルタエンコーディングされたオフセットです。デルタエンコーディングとは、i 番目の値が値 [1..i] の合計であることを意味します。
 
-The list is terminated by a 0 (0 is not meaningful as valid delta).
+リストは 0 で終端されます（0 は有効なデルタとしては意味がありません）。
 
-**Note:** This is a per-assembly section. In single-file R2R files, it is pointed to directly by the
-main R2R header; in composite R2R files, each component module has its own entrypoint section pointed to
-by the `READYTORUN_SECTION_ASSEMBLIES_ENTRY` core header structure.
+**注:** これはアセンブリごとのセクションです。単一ファイル R2R ファイルでは、メインの R2R ヘッダーから直接指されます。コンポジット R2R ファイルでは、各コンポーネントモジュールが `READYTORUN_SECTION_ASSEMBLIES_ENTRY` コアヘッダー構造体によって指される独自のエントリポイントセクションを持ちます。
 
 ## ReadyToRunSectionType.ExceptionInfo
 
-Exception handling information. This section contains array of
-`READYTORUN_EXCEPTION_LOOKUP_TABLE_ENTRY` sorted by `MethodStart` RVA. `ExceptionInfo` is RVA of
-`READYTORUN_EXCEPTION_CLAUSE` array that described the exception handling information for given
-method.
+例外処理情報。このセクションには、`MethodStart` RVA でソートされた `READYTORUN_EXCEPTION_LOOKUP_TABLE_ENTRY` の配列が含まれます。`ExceptionInfo` は、指定されたメソッドの例外処理情報を記述する `READYTORUN_EXCEPTION_CLAUSE` 配列の RVA です。
 
 ```C++
 struct READYTORUN_EXCEPTION_LOOKUP_TABLE_ENTRY
@@ -467,135 +416,106 @@ struct READYTORUN_EXCEPTION_CLAUSE
 };
 ```
 
-Same encoding is as used by NGen.
+NGen と同じエンコーディングが使用されます。
 
 ## ReadyToRunSectionType.DebugInfo
 
-This section contains information to support debugging: native offset and local variable maps.
+このセクションには、デバッグをサポートするための情報（ネイティブオフセットとローカル変数のマップ）が含まれます。
 
-**TODO**: Document the debug info encoding. It is the same encoding as used by NGen. It should not be
-required when debuggers are able to handle debug info stored separately.
+**TODO**: デバッグ情報のエンコーディングをドキュメント化する。NGen で使用されるのと同じエンコーディングです。デバッガが別途保存されたデバッグ情報を処理できるようになった場合には不要です。
 
 ## ReadyToRunSectionType.DelayLoadMethodCallThunks
 
-This section marks region that contains thunks for `READYTORUN_HELPER_DelayLoad_MethodCall`
-helper. It is used by debugger for step-in into lazily resolved calls. It should not be required when
-debuggers are able to handle debug info stored separately.
+このセクションは、`READYTORUN_HELPER_DelayLoad_MethodCall` ヘルパーのサンク (thunk) を含む領域をマークします。これは、遅延解決される呼び出しへのステップインのためにデバッガが使用します。デバッガが別途保存されたデバッグ情報を処理できるようになった場合には不要です。
 
 ## ReadyToRunSectionType.AvailableTypes
 
-This section contains a native hashtable of all defined & export types within the compilation module. The key is the full type name, the value is the exported type or defined type token row ID left-shifted by one and or-ed with bit 0 defining the token type:
+このセクションには、コンパイルモジュール内のすべての定義型およびエクスポート型のネイティブハッシュテーブル (hashtable) が含まれます。キーは完全な型名で、値はエクスポート型または定義型のトークン行 ID を左に 1 ビットシフトし、ビット 0 でトークンタイプを定義する値と OR したものです:
 
-| Bit value | Token type
-|----------:|:----------
-|         0 | defined type
-|         1 | exported type
+| ビット値 | トークンタイプ |
+| -------: | :------------- |
+|        0 | 定義型         |
+|        1 | エクスポート型 |
 
-The version-resilient hashing algorithm used for hashing the type names is implemented in
-[vm/versionresilienthashcode.cpp](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/vm/versionresilienthashcode.cpp#L74).
+型名のハッシュに使用されるバージョン耐性ハッシュアルゴリズム (version-resilient hashing algorithm) は、[vm/versionresilienthashcode.cpp](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/vm/versionresilienthashcode.cpp#L74) に実装されています。
 
-**Note:** This is a per-assembly section. In single-file R2R files, it is pointed to directly by the
-main R2R header; in composite R2R files, each component module has its own available type section pointed to
-by the `READYTORUN_SECTION_ASSEMBLIES_ENTRY` core header structure.
+**注:** これはアセンブリごとのセクションです。単一ファイル R2R ファイルでは、メインの R2R ヘッダーから直接指されます。コンポジット R2R ファイルでは、各コンポーネントモジュールが `READYTORUN_SECTION_ASSEMBLIES_ENTRY` コアヘッダー構造体によって指される独自の利用可能型セクションを持ちます。
 
 ## ReadyToRunSectionType.InstanceMethodEntryPoints
 
-This section contains a native hashtable of all generic method instantiations compiled into
-the R2R executable. The key is the method instance signature; the appropriate version-resilient
-hash code calculation is implemented in
-[vm/versionresilienthashcode.cpp](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/vm/versionresilienthashcode.cpp#L126);
-the value, represented by the `EntryPointWithBlobVertex` class, stores the method index in the
-runtime function table, the fixups blob and a blob encoding the method signature.
+このセクションには、R2R 実行可能ファイルにコンパイルされたすべてのジェネリックメソッドインスタンス化のネイティブハッシュテーブルが含まれます。キーはメソッドインスタンスシグネチャです。適切なバージョン耐性ハッシュコードの計算は [vm/versionresilienthashcode.cpp](https://github.com/dotnet/runtime/blob/69e114c1abf91241a0eeecf1ecceab4711b8aa62/src/coreclr/vm/versionresilienthashcode.cpp#L126) に実装されています。値は `EntryPointWithBlobVertex` クラスによって表され、ランタイム関数テーブル内のメソッドインデックス、フィックスアップブロブ、およびメソッドシグネチャをエンコードするブロブを格納します。
 
-**Note:** In contrast to non-generic method entrypoints, this section is image-wide for
-composite R2R images. It represents all generics needed by all assemblies within the composite
-executable. As mentioned elsewhere in this document, CoreCLR runtime requires changes to
-properly look up methods stored in this section in the composite R2R case.
+**注:** 非ジェネリックメソッドのエントリポイントとは対照的に、このセクションはコンポジット R2R イメージの場合にイメージ全体にわたります。コンポジット実行可能ファイル内のすべてのアセンブリが必要とするすべてのジェネリクスを表します。本ドキュメントの他の箇所で述べたように、CoreCLR ランタイムは、コンポジット R2R ケースでこのセクションに格納されたメソッドを適切に検索するための変更が必要です。
 
-**Note:** Generic methods and non-generic methods on generic types are encoded into this table
-and the runtime is expected to lookup into this table in potentially multiple modules. First the
-runtime is expected to lookup into this table for the module which defines the method, then it is
-expected to use the "alternate" generics location which is defined as the module which is NOT the
-defining module which is the defining module of one of the generic arguments to the method. This
-alternate lookup is not currently a deeply nested algorithm. If that lookup fails, then lookup
-will proceed to every module which specified `READYTORUN_FLAG_UNRELATED_R2R_CODE` as a flag.
+**注:** ジェネリックメソッドおよびジェネリック型の非ジェネリックメソッドはこのテーブルにエンコードされ、ランタイムは潜在的に複数のモジュールでこのテーブルを検索することが期待されます。まず、ランタイムはメソッドを定義するモジュールのこのテーブルを検索し、次に「代替」ジェネリクスの場所を使用することが期待されます。この代替の場所は、メソッドのジェネリック引数の一つの定義モジュールである、定義モジュールではないモジュールとして定義されます。この代替ルックアップは現在、深くネストされたアルゴリズムではありません。そのルックアップが失敗した場合、`READYTORUN_FLAG_UNRELATED_R2R_CODE` をフラグとして指定したすべてのモジュールに対してルックアップが行われます。
 
 ## ReadyToRunSectionType.InliningInfo (v2.1+)
 
-**TODO**: document inlining info encoding
+**TODO**: インライン情報のエンコーディングをドキュメント化する
 
 ## ReadyToRunSectionType.ProfileDataInfo (v2.2+)
 
-**TODO**: document profile data encoding
+**TODO**: プロファイルデータのエンコーディングをドキュメント化する
 
-## ReadyToRunSectionType.ManifestMetadata (v2.3+ with changes for v6.3+)
+## ReadyToRunSectionType.ManifestMetadata (v2.3+、v6.3+ で変更あり)
 
-Manifest metadata is an [ECMA-335] metadata blob containing extra reference assemblies within
-the version bubble introduced by inlining on top of assembly references stored in the input MSIL.
-As of R2R version 3.1, the metadata is only used for the AssemblyRef table. This is used to
-translate module override indices in signatures to the actual reference modules (using either
-the `READYTORUN_FIXUP_ModuleOverride` bit flag on the signature fixup byte or the
-`ELEMENT_TYPE_MODULE_ZAPSIG` COR element type).
+マニフェストメタデータ (manifest metadata) は、入力 MSIL に格納されたアセンブリ参照に加えて、インライン化によってバージョンバブル (version bubble) 内に導入された追加の参照アセンブリを含む [ECMA-335] メタデータブロブです。
+R2R バージョン 3.1 時点では、メタデータは AssemblyRef テーブルにのみ使用されます。これは、シグネチャ内のモジュールオーバーライドインデックスを実際の参照モジュールに変換するために使用されます（シグネチャフィックスアップバイトの `READYTORUN_FIXUP_ModuleOverride` ビットフラグまたは `ELEMENT_TYPE_MODULE_ZAPSIG` COR 要素型のいずれかを使用）。
 
-**Note:** It doesn't make sense to use references to assemblies external to the version bubble
-in the manifest metadata via the `READYTORUN_FIXUP_ModuleOverride` or `ELEMENT_TYPE_MODULE_ZAPSIG` concept
-as there's no guarantee that their metadata token values remain constant; thus we cannot encode signatures relative to them.
-However, as of R2R version 6.3, the native manifest metadata may contain tokens to be further resolved to actual
-implementation assemblies.
+::: tip 💡 初心者向け補足
+バージョンバブル (version bubble) とは、一緒にコンパイルされ、互いのコード/データ構造を直接参照できるアセンブリのグループのことです。バブル内のアセンブリは互いに「信頼」し合い、内部の詳細に依存できますが、バブル外のアセンブリに対しては安定した公開 API のみを使用する必要があります。
+:::
 
-The module override index translation algorithm is as follows (**ILAR** = *the number of `AssemblyRef` rows in the input MSIL*):
+**注:** バージョンバブル外部のアセンブリへの参照を `READYTORUN_FIXUP_ModuleOverride` または `ELEMENT_TYPE_MODULE_ZAPSIG` の概念を通じてマニフェストメタデータで使用することは意味がありません。メタデータトークン値が一定であるという保証がないため、それらに対してシグネチャを相対的にエンコードすることはできません。
+ただし、R2R バージョン 6.3 以降、ネイティブマニフェストメタデータには、実際の実装アセンブリにさらに解決されるトークンが含まれる場合があります。
 
-For R2R version 6.2 and below
+モジュールオーバーライドインデックスの変換アルゴリズムは以下の通りです（**ILAR** = _入力 MSIL の `AssemblyRef` 行数_）:
 
-| Module override index (*i*) | Reference assembly
-|:----------------------------|:------------------
-| *i* = 0                     | Global context - assembly containing the signature
-| 1 <= *i* <= **ILAR**        | *i* is the index into the MSIL `AssemblyRef` table
-| *i* > **ILAR**              | *i* - **ILAR** - 1 is the zero-based index into the `AssemblyRef` table in the manifest metadata
+R2R バージョン 6.2 以下の場合
 
-**Note:** This means that the entry corresponding to *i* = **ILAR** + 1 is actually undefined as it corresponds to the `NULL` entry (ROWID #0) in the manifest metadata AssemblyRef table. The first meaningful index into the manifest metadata, *i* = **ILAR** + 2, corresponding to ROWID #1, is historically filled in by Crossgen with the input assembly info but this shouldn't be depended upon, in fact the input assembly is useless in the manifest metadata as the module override to it can be encoded by using the special index 0.
+| モジュールオーバーライドインデックス (_i_) | 参照アセンブリ                                                                                 |
+| :----------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| _i_ = 0                                    | グローバルコンテキスト - シグネチャを含むアセンブリ                                            |
+| 1 <= _i_ <= **ILAR**                       | _i_ は MSIL `AssemblyRef` テーブルへのインデックス                                             |
+| _i_ > **ILAR**                             | _i_ - **ILAR** - 1 はマニフェストメタデータの `AssemblyRef` テーブルへのゼロベースインデックス |
 
-For R2R version 6.3 and above
-| Module override index (*i*) | Reference assembly
-|:----------------------------|:------------------
-| *i* = 0                     | Global context - assembly containing the signature
-| 1 <= *i* <= **ILAR**        | *i* is the index into the MSIL `AssemblyRef` table
-| *i* = **ILAR** + 1          | *i* is the index which refers to the Manifest metadata itself
-| *i* > **ILAR** + 1          | *i* - **ILAR** - 2 is the zero-based index into the `AssemblyRef` table in the manifest metadata
+**注:** これは、_i_ = **ILAR** + 1 に対応するエントリが実際には未定義であることを意味します。マニフェストメタデータ AssemblyRef テーブルの `NULL` エントリ（ROWID #0）に対応するためです。マニフェストメタデータへの最初の意味のあるインデックスは _i_ = **ILAR** + 2 で、ROWID #1 に対応し、歴史的に Crossgen によって入力アセンブリ情報で埋められていますが、これに依存すべきではありません。実際、入力アセンブリはマニフェストメタデータでは不要であり、特別なインデックス 0 を使用してモジュールオーバーライドをエンコードできます。
 
-In addition, a ModuleRef within the module which refers to `System.Private.CoreLib` may be used to serve as the *ResolutionContext* of a *TypeRef* within the manifest metadata. This will always refer to the module which contains the `System.Object` type.
+R2R バージョン 6.3 以上の場合
+
+| モジュールオーバーライドインデックス (_i_) | 参照アセンブリ                                                                                 |
+| :----------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| _i_ = 0                                    | グローバルコンテキスト - シグネチャを含むアセンブリ                                            |
+| 1 <= _i_ <= **ILAR**                       | _i_ は MSIL `AssemblyRef` テーブルへのインデックス                                             |
+| _i_ = **ILAR** + 1                         | _i_ はマニフェストメタデータ自体を参照するインデックス                                         |
+| _i_ > **ILAR** + 1                         | _i_ - **ILAR** - 2 はマニフェストメタデータの `AssemblyRef` テーブルへのゼロベースインデックス |
+
+さらに、`System.Private.CoreLib` を参照するモジュール内の ModuleRef は、マニフェストメタデータ内の _TypeRef_ の _ResolutionContext_ として機能できます。これは常に `System.Object` 型を含むモジュールを参照します。
 
 ## ReadyToRunSectionType.AttributePresence (v3.1+)
 
-**TODO**: document attribute presence encoding
+**TODO**: 属性プレゼンスのエンコーディングをドキュメント化する
 
-**Note:** This is a per-assembly section. In single-file R2R files, it is pointed to directly by the
-main R2R header; in composite R2R files, each component module has its own attribute presence
-section pointed to by the `READYTORUN_SECTION_ASSEMBLIES_ENTRY` core header structure.
+**注:** これはアセンブリごとのセクションです。単一ファイル R2R ファイルでは、メインの R2R ヘッダーから直接指されます。コンポジット R2R ファイルでは、各コンポーネントモジュールが `READYTORUN_SECTION_ASSEMBLIES_ENTRY` コアヘッダー構造体によって指される独自の属性プレゼンスセクションを持ちます。
 
 ## ReadyToRunSectionType.InliningInfo2 (v4.1+)
 
-The inlining information section captures what methods got inlined into other methods. It consists of a single _Native Format Hashtable_ (described below).
+インライン化情報セクションは、どのメソッドが他のメソッドにインライン化されたかを記録します。単一の _ネイティブフォーマットハッシュテーブル_（後述）で構成されます。
 
-The entries in the hashtable are lists of inliners for each inlinee. One entry in the hashtable corresponds to one inlinee. The hashtable is hashed by hashcode of the module name XORed with inlinee RID.
+ハッシュテーブル内のエントリは、各インライニー (inlinee) に対するインライナー (inliner) のリストです。ハッシュテーブル内の 1 エントリは 1 つのインライニーに対応します。ハッシュテーブルは、モジュール名のハッシュコードとインライニーの RID を XOR した値でハッシュされます。
 
-The entry of the hashtable is a counted sequence of compressed unsigned integers:
+ハッシュテーブルのエントリは、圧縮された符号なし整数のカウント付きシーケンスです:
 
-* RID of the inlinee shifted left by one bit. If the lowest bit is set, this is an inlinee from a foreign module. The _module override index_ (as defined above) follows as another compressed unsigned integer in that case.
-* RIDs of the inliners follow. They are encoded similarly to the way the inlinee is encoded (shifted left with the lowest bit indicating foreign RID). Instead of encoding the RID directly, RID delta (the difference between the previous RID and the current RID) is encoded. This allows better integer compression.
+- インライニーの RID を左に 1 ビットシフトしたもの。最下位ビットが設定されている場合、これは外部モジュールからのインライニーです。その場合、_モジュールオーバーライドインデックス_（上記で定義）が別の圧縮された符号なし整数として続きます。
+- インライナーの RID が続きます。インライニーのエンコード方法と同様にエンコードされます（左シフトし、最下位ビットが外部 RID を示します）。RID を直接エンコードする代わりに、RID デルタ（前の RID と現在の RID の差）がエンコードされます。これにより、より良い整数圧縮が可能になります。
 
-Foreign RIDs are only present if a fragile inlining was allowed at compile time.
+外部 RID は、コンパイル時に脆弱なインライン化が許可された場合にのみ存在します。
 
-**TODO:** It remains to be seen whether `DelayLoadMethodCallThunks` and / or
-`InliningInfo` also require changes specific to the composite R2R file format.
+**TODO:** `DelayLoadMethodCallThunks` や `InliningInfo` もコンポジット R2R ファイルフォーマットに固有の変更が必要かどうかはまだ検討中です。
 
 ## ReadyToRunSectionType.ComponentAssemblies (v4.1+)
 
-This image-wide section is only present in the main R2R header of composite R2R files. It is an
-array of the entries `READYTORUN_SECTION_ASSEMBLIES_ENTRY` parallel to the indices in the manifest metadata
-AssemblyRef table in the sense that it's a linear table where the row indices correspond to the
-equivalent AssemblyRef indices. Just like in the AssemblyRef ECMA 335 table, the indexing is
-1-based (the first entry in the table corresponds to index 1).
+このイメージ全体のセクションは、コンポジット R2R ファイルのメイン R2R ヘッダーにのみ存在します。これは、マニフェストメタデータの AssemblyRef テーブルのインデックスと並列な `READYTORUN_SECTION_ASSEMBLIES_ENTRY` エントリの配列です。行インデックスが同等の AssemblyRef インデックスに対応する線形テーブルです。ECMA 335 の AssemblyRef テーブルと同様に、インデックスは 1 ベースです（テーブルの最初のエントリはインデックス 1 に対応します）。
 
 ```C++
 struct READYTORUN_SECTION_ASSEMBLIES_ENTRY
@@ -607,227 +527,230 @@ struct READYTORUN_SECTION_ASSEMBLIES_ENTRY
 
 ## ReadyToRunSectionType.OwnerCompositeExecutable (v4.1+)
 
-For composite R2R executables with standalone MSIL, the MSIL files are rewritten during compilation
-by receiving a formal ReadyToRun header with the appropriate signature and major / minor version
-pair; in `Flags`, it has the `READYTORUN_FLAG_COMPONENT` bit set and its section list only contains
-the `OwnerCompositeExecutable` section that contains a UTF-8 string encoding the file name of the
-composite R2R executable this MSIL belongs to with extension (without path). Runtime uses this
-information to locate the composite R2R executable with the compiled native code when loading the MSIL.
+スタンドアロン MSIL を持つコンポジット R2R 実行可能ファイルの場合、MSIL ファイルはコンパイル中に書き換えられ、適切なシグネチャとメジャー/マイナーバージョンペアを持つ正式な ReadyToRun ヘッダーが付与されます。`Flags` には `READYTORUN_FLAG_COMPONENT` ビットが設定され、そのセクションリストには、この MSIL が属するコンポジット R2R 実行可能ファイルのファイル名を拡張子付き（パスなし）で UTF-8 文字列としてエンコードする `OwnerCompositeExecutable` セクションのみが含まれます。ランタイムは、MSIL をロードする際にコンパイル済みネイティブコードを含むコンポジット R2R 実行可能ファイルを特定するためにこの情報を使用します。
 
 ## ReadyToRunSectionType.PgoInstrumentationData (v5.2+)
 
-**TODO**: document PGO instrumentation data
+**TODO**: PGO インストルメンテーションデータをドキュメント化する
 
 ## ReadyToRunSectionType.ManifestAssemblyMvids (v5.3+)
 
-This section is a binary array of 16-byte MVID records, one for each assembly in the manifest metadata.
-Number of assemblies stored in the manifest metadata is equal to the number of MVID records in the array.
-MVID records are used at runtime to verify that the assemblies loaded match those referenced by the
-manifest metadata representing the versioning bubble.
+このセクションは、マニフェストメタデータ内の各アセンブリに対する 16 バイト MVID レコードのバイナリ配列です。マニフェストメタデータに格納されたアセンブリ数は、配列内の MVID レコード数と等しくなります。MVID レコードは実行時に、ロードされたアセンブリがバージョニングバブルを表すマニフェストメタデータによって参照されたものと一致することを検証するために使用されます。
 
 ## ReadyToRunSectionType.CrossModuleInlineInfo (v6.3+)
-The inlining information section captures what methods got inlined into other methods. It consists of a single _Native Format Hashtable_ (described below).
 
-The entries in the hashtable are lists of inliners for each inlinee. One entry in the hashtable corresponds to one inlinee. The hashtable is hashed with the version resilient hashcode of the uninstantiated methoddef inlinee.
+インライン化情報セクションは、どのメソッドが他のメソッドにインライン化されたかを記録します。単一の _ネイティブフォーマットハッシュテーブル_（後述）で構成されます。
 
-The entry of the hashtable is a counted sequence of compressed unsigned integers which begins with an InlineeIndex which combines a 30 bit index with 2 bits of flags which how the sequence of inliners shall be parsed and what table is to be indexed into to find the inlinee.
+ハッシュテーブル内のエントリは、各インライニーに対するインライナーのリストです。ハッシュテーブル内の 1 エントリは 1 つのインライニーに対応します。ハッシュテーブルは、インスタンス化されていない methoddef インライニーのバージョン耐性ハッシュコードでハッシュされます。
 
-* InlineeIndex
-  * Index with 2 flags field in lowest 2 bits to define the inlinee
-    - If (flags & 1) == 0 then index is a MethodDef RID, and if the module is a composite image, a module index of the method follows
-    - If (flags & 1) == 1, then index is an index into the ILBody import section
-    - If (flags & 2) == 0 then inliner list is:
-      - Inliner RID deltas - See definition below
-    - if (flags & 2) == 2 then what follows is:
-      - count of delta encoded indices into the ILBody import section
-      - the sequence of delta encoded indices into the first import section with a type of READYTORUN_IMPORT_SECTION_TYPE_ILBODYFIXUPS
-      - Inliner RID deltas - See definition below
+ハッシュテーブルのエントリは、InlineeIndex で始まる圧縮された符号なし整数のカウント付きシーケンスです。InlineeIndex は 30 ビットのインデックスと 2 ビットのフラグを組み合わせたもので、インライナーのシーケンスの解析方法と、インライニーを見つけるためにインデックスされるテーブルを定義します。
 
-* Inliner RID deltas (for multi-module version bubble images specified by the module having the READYTORUN_FLAG_MULTIMODULE_VERSION_BUBBLE flag set)
-  - a sequence of inliner RID deltas with flag in the lowest bit
-  - if flag is set, the inliner RID is followed by a module ID
-  - otherwise the module is the same as the module of the inlinee method
-* Inliner RID deltas (for single module version bubble images)
-  - a sequence of inliner RID deltas
+- InlineeIndex
+  - インライニーを定義するための最下位 2 ビットのフラグフィールドを持つインデックス
+    - (flags & 1) == 0 の場合、インデックスは MethodDef RID であり、モジュールがコンポジットイメージの場合、メソッドのモジュールインデックスが続きます
+    - (flags & 1) == 1 の場合、インデックスは ILBody インポートセクションへのインデックスです
+    - (flags & 2) == 0 の場合、インライナーリストは:
+      - インライナー RID デルタ - 下記の定義を参照
+    - (flags & 2) == 2 の場合、続くのは:
+      - ILBody インポートセクションへのデルタエンコードされたインデックスのカウント
+      - READYTORUN_IMPORT_SECTION_TYPE_ILBODYFIXUPS タイプを持つ最初のインポートセクションへのデルタエンコードされたインデックスのシーケンス
+      - インライナー RID デルタ - 下記の定義を参照
 
-This section may be included in addition to a InliningInfo2 section.
+- インライナー RID デルタ（READYTORUN_FLAG_MULTIMODULE_VERSION_BUBBLE フラグが設定されたモジュールで指定されるマルチモジュールバージョンバブルイメージの場合）
+  - 最下位ビットにフラグを持つインライナー RID デルタのシーケンス
+  - フラグが設定されている場合、インライナー RID の後にモジュール ID が続きます
+  - そうでない場合、モジュールはインライニーメソッドと同じモジュールです
+- インライナー RID デルタ（シングルモジュールバージョンバブルイメージの場合）
+  - インライナー RID デルタのシーケンス
+
+このセクションは InliningInfo2 セクションに加えて含まれる場合があります。
 
 ## ReadyToRunSectionType.HotColdMap (v8.0+)
-In ReadyToRun 8.0+, the format supports splitting a method into hot and cold parts so that they are not located together. This hot-cold map section captures the information about how methods are split so that the runtime can locate them for various services.
 
-For every method that is split, there is a single entry in the section. Each entry has two unsigned 32-bit integers. The first integer is the runtime function index of the cold part and the second integer is the runtime function index of the hot part.
+ReadyToRun 8.0+ では、メソッドをホットパート (hot part) とコールドパート (cold part) に分割して、それらが隣接しないようにするフォーマットがサポートされています。このホットコールドマップセクションは、メソッドがどのように分割されたかの情報を記録し、ランタイムがさまざまなサービスのためにそれらを特定できるようにします。
 
-The methods in this table are sorted by their hot part runtime function indices, which are also sorted by their cold part runtime function indices because we always emit the cold part in the same order as the hot parts, or by their RVAs because the runtime function table itself is sorted by the RVAs.
+::: tip 💡 初心者向け補足
+ホット/コールド分割とは、頻繁に実行されるコード（ホット）とほとんど実行されないコード（コールド、例外処理パスなど）を物理的に分離する最適化手法です。ホットなコードをメモリ上で近くにまとめることで、CPU のキャッシュ効率を向上させ、パフォーマンスを改善します。
+:::
 
-This section may not exist if no method is split - this happens when the `--hot-cold-splitting` flag is not specified during compilation, or the compiler decides it should not split any methods.
+分割されたすべてのメソッドに対して、セクション内に 1 つのエントリがあります。各エントリには 2 つの符号なし 32 ビット整数があります。最初の整数はコールドパートのランタイム関数インデックスで、2 番目の整数はホットパートのランタイム関数インデックスです。
+
+このテーブル内のメソッドは、ホットパートのランタイム関数インデックスでソートされています。コールドパートは常にホットパートと同じ順序で出力されるため、コールドパートのランタイム関数インデックスでもソートされています。あるいはランタイム関数テーブル自体が RVA でソートされているため、RVA でソートされているとも言えます。
+
+`--hot-cold-splitting` フラグがコンパイル時に指定されていない場合、またはコンパイラがメソッドを分割すべきではないと判断した場合、メソッドは分割されず、このセクションは存在しない場合があります。
 
 ## ReadyToRunSectionType.MethodIsGenericMap (v9.0+)
-This optional section holds a bit vector to indicate if the MethodDefs contained within the assembly have generic parameters or not. This allows determining if a method is generic or not by querying a bit vector (which is fast, and efficient) as opposed to examining the GenericParameter table, or the signature of the Method.
 
-The section begins with a single 32 bit integer indicating the number of bits in the bit vector. Following that integer is the actual bit vector of all of the data. The data is grouped into 8 bit bytes, where the least significant bit of the byte is the bit which represents the lowest MethodDef.
+このオプションセクションは、アセンブリ内の MethodDef がジェネリックパラメータを持つかどうかを示すビットベクトル (bit vector) を保持します。これにより、GenericParameter テーブルやメソッドのシグネチャを調べる代わりに、ビットベクトルへの問い合わせ（高速かつ効率的）によってメソッドがジェネリックかどうかを判定できます。
 
-For instance, the first byte in the bit vector represents the MethodDefs 06000001 to 06000008, and the least signficant bit of that first byte is the bit representing the IsGeneric bit for MethodDef 06000001.
+セクションは、ビットベクトル内のビット数を示す 32 ビット整数 1 つで始まります。その整数の後に、すべてのデータの実際のビットベクトルが続きます。データは 8 ビットバイトにグループ化され、バイトの最下位ビットが最も低い MethodDef を表すビットです。
+
+たとえば、ビットベクトルの最初のバイトは MethodDef 06000001 から 06000008 を表し、その最初のバイトの最下位ビットは MethodDef 06000001 の IsGeneric ビットを表すビットです。
 
 ## ReadyToRunSectionType.EnclosingTypeMap (v9.0+)
 
-This optional section allows for efficient O(1) lookup from the enclosed type to the type which encloses it without requiring the binary search that is necessary if using the ECMA 335 defined NestedClass table (which encodes exactly the same information). This section may only be included in the assembly if the assembly has fewer than 0xFFFE types defined within it.
+このオプションセクションは、囲まれた型から囲む型への効率的な O(1) ルックアップを可能にします。ECMA 335 で定義された NestedClass テーブル（同じ情報をエンコードする）を使用する場合に必要なバイナリサーチが不要になります。このセクションは、アセンブリ内に 0xFFFE 未満の型が定義されている場合にのみ含めることができます。
 
-The structure of this section is:
-A single 16 bit unsigned integer listing the count of entries in the map.
-This count is followed by a 16 bit unsigned integer for each TypeDef defined in the assembly. This typedef is the RID of the enclosing type, or 0 if the typedef is not enclosed by another type.
+このセクションの構造は:
+マップ内のエントリ数を示す 16 ビット符号なし整数 1 つ。
+このカウントの後に、アセンブリ内で定義された各 TypeDef に対する 16 ビット符号なし整数が続きます。この typedef は囲む型の RID であり、typedef が他の型に囲まれていない場合は 0 です。
 
 ## ReadyToRunSectionType.TypeGenericInfoMap (v9.0+)
-This optional section represents a condensed view of some generic details about types. This can make it more efficient to load types.
 
-The structure of this section is:
-A single 32 bit integer representing the number of entries in the map followed by a series of 4 bit entries, one per type. These 4 bit entries are grouped into bytes, where each byte holds 2 entries, and the entry in the most significant 4 bits of the byte is the entry representing a lower TypeDef RID.
+このオプションセクションは、型に関するジェネリックの詳細の凝縮されたビューを表します。これにより、型のロードをより効率的にできます。
 
-TypeGenericInfoMap entries have 4 bits representing 3 different sets of information.
+このセクションの構造は:
+マップ内のエントリ数を表す 32 ビット整数 1 つの後に、型ごとに 1 つの 4 ビットエントリのシリーズが続きます。これらの 4 ビットエントリはバイトにグループ化され、各バイトは 2 エントリを保持し、バイトの最上位 4 ビットのエントリがより低い TypeDef RID を表すエントリです。
 
-1. What is the count of generic parameters (0, 1, 2, MoreThanTwo) (This is represented in the least significant 2 bits of the TypeGenericInfoMap entry)
-2. Are there any constraints on the generic parameters? (This is the 3rd bit of the entry)
-3. Do any of the generic parameters have co or contra variance? (This is the 4th bit of the entry)
+TypeGenericInfoMap エントリは、3 つの異なる情報セットを表す 4 ビットを持ちます。
 
-# Native Format
+1. ジェネリックパラメータの数はいくつか (0, 1, 2, MoreThanTwo)（TypeGenericInfoMap エントリの最下位 2 ビットで表されます）
+2. ジェネリックパラメータに制約はあるか?（エントリの 3 番目のビット）
+3. ジェネリックパラメータのいずれかに共変性 (covariance) または反変性 (contravariance) があるか?（エントリの 4 番目のビット）
 
-Native format is set of encoding patterns that allow persisting type system data in a binary format that is
-efficient for runtime access - both in working set and CPU cycles. (Originally designed for and extensively
-used by .NET Native.)
+# ネイティブフォーマット
 
-## Integer encoding
+ネイティブフォーマット (Native Format) は、型システムデータを、実行時アクセスに効率的なバイナリフォーマットで永続化するためのエンコーディングパターンのセットです。ワーキングセットと CPU サイクルの両方で効率的です。（元々は .NET Native 向けに設計され、広く使用されています。）
 
-Native format uses a variable length encoding scheme for signed and unsigned numbers. The low bits of
-the first byte of the encoding specify the number of following bytes as follows:
+::: tip 💡 初心者向け補足
+ネイティブフォーマットは、メタデータやルックアップテーブルなどのデータを、ランタイムが高速にアクセスできるよう特別にエンコードしたバイナリ形式です。整数の可変長エンコーディング、スパース配列、ハッシュテーブルなど、コンパクトさとアクセス速度の両方を追求したデータ構造が使われています。
+:::
 
-* `xxxxxxx0` (i.e. the least significant bit is 0): no more bytes follow. Shift the byte one bit right, and
-  sign or zero extend for signed and unsigned number, respectively.
-* `xxxxxx01`: one more byte follows. Build a 16-bit number from the two bytes read (little-endian
-  order), shift it right by 2 bits, then sign or zero extend.
-* `xxxxx011`: two more bytes follow. Build a 24-bit number from the three bytes read (little-endian
-  order), shift it right by 3 bits, then sign or zero extend.
-* `xxxx0111`: three more bytes follow. Build a 32-bit number from the four bytes read, then sign or
-  zero extend
-* `xxxx1111`: four more bytes follow. Discard the first byte, build the signed or unsigned number
-  from the following four bytes (again little-endian order).
+## 整数エンコーディング
 
-**Examples**:
-* the unsigned number 12 (`0x0000000c`) would be expressed as the single byte `0x18`.
-* The unsigned number 1000 (`0x000003e8`) would be expressed as the two bytes `0xa1, 0x0f`
+ネイティブフォーマットは、符号付きおよび符号なし数値に可変長エンコーディング方式を使用します。エンコーディングの最初のバイトの下位ビットが、後続バイト数を以下のように指定します:
 
-## Sparse Array
+- `xxxxxxx0`（すなわち最下位ビットが 0）: 後続バイトなし。バイトを右に 1 ビットシフトし、符号付きおよび符号なし数値に対してそれぞれ符号拡張またはゼロ拡張します。
+- `xxxxxx01`: 後続 1 バイト。読み取った 2 バイトからリトルエンディアン (little-endian) 順で 16 ビット数を構築し、右に 2 ビットシフトした後、符号拡張またはゼロ拡張します。
+- `xxxxx011`: 後続 2 バイト。読み取った 3 バイトからリトルエンディアン順で 24 ビット数を構築し、右に 3 ビットシフトした後、符号拡張またはゼロ拡張します。
+- `xxxx0111`: 後続 3 バイト。読み取った 4 バイトから 32 ビット数を構築した後、符号拡張またはゼロ拡張します。
+- `xxxx1111`: 後続 4 バイト。最初のバイトを破棄し、続く 4 バイトから符号付きまたは符号なし数値を構築します（同様にリトルエンディアン順）。
 
-The NativeArray provides O(1) indexed access while maintaining compact storage through null element compression (empty blocks share storage) and variable-sized offset encoding (adapts to data size).
+**例**:
 
-The array is made up of three parts, the header, block index, and the blocks.
+- 符号なし数値 12（`0x0000000c`）は、単一バイト `0x18` として表現されます。
+- 符号なし数値 1000（`0x000003e8`）は、2 バイト `0xa1, 0x0f` として表現されます。
 
-The header is a variable encoded value where:
-- Bits 0-1: Entry index size
-  - 0 = uint8 offsets
-  - 1 = uint16 offsets
-  - 2 = uint32 offsets
-- Bits 2-31: Number of elements in the array
+## スパース配列
 
-The block index immediately follows the header in memory and consists of one offset entry per block (dynamic size encoded in the header), where each entry points to the location of a data block relative to the start of the block index section. The array uses a maximum block size of 16 elements, the block index effectively maps every group of 16 consecutive array indices to their corresponding data blocks.
+NativeArray は、ヌル要素圧縮（空ブロックの共有ストレージ）と可変サイズオフセットエンコーディング（データサイズに適応）を通じてコンパクトなストレージを維持しつつ、O(1) のインデックスアクセスを提供します。
 
-The following the block index are the actual data blocks. These are made up of two types of nodes. Tree nodes and Data nodes.
+配列は、ヘッダー、ブロックインデックス、ブロックの 3 つの部分で構成されます。
 
-Tree nodes are made up of a variable length encoded uint where:
-- Bit 0: If set, the node has a lower index child
-- Bit 1: If set, the node has a higher index child
-- Bits 2-31: Shifted relative offset of higher index child
+ヘッダーは可変エンコードされた値で:
 
-Data nodes contain the user defined data.
+- ビット 0-1: エントリインデックスサイズ
+  - 0 = uint8 オフセット
+  - 1 = uint16 オフセット
+  - 2 = uint32 オフセット
+- ビット 2-31: 配列内の要素数
 
-Since each block has at most 16 elements, they have a depth of `4`.
+ブロックインデックスはメモリ上でヘッダーの直後に続き、ブロックごとに 1 つのオフセットエントリ（ヘッダーにエンコードされた動的サイズ）で構成されます。各エントリは、ブロックインデックスセクションの先頭からの相対位置でデータブロックの位置を指します。配列は最大ブロックサイズ 16 要素を使用し、ブロックインデックスは実質的に 16 個ずつの連続した配列インデックスの各グループを対応するデータブロックにマッピングします。
 
-### Lookup Algorithm Steps
+ブロックインデックスの後に実際のデータブロックが続きます。これらはツリーノード (tree node) とデータノード (data node) の 2 種類のノードで構成されます。
 
-**Step 1: Read the Header**
-- Decode the variable-length encoded header value from the array
-- Extract the entry index size from bits 0-1 (0=uint8, 1=uint16, 2=uint32 offsets)
-- Extract the total number of elements from bits 2-31 by right-shifting the header value by 2 bits
-- Use this information to determine how to interpret the block index entries and validate array bounds
+ツリーノードは可変長エンコードされた uint で構成されます:
 
-**Step 2: Calculate Block Offset**
-- Determine the block index `blockIndex` containing the target element by dividing the index by the block size (16).
-- Calculate the memory location containing the block offset `pBlockOffset = baseOffset + entrySize * blockIndex` where `baseOffset` is the address immediately following the header and `entrySize` is determined by the low bits of the header.
-- Read the block offset `blockOffset` from the block index table using the calculated `pBlockOffset` and entry size determined by the header.
-- Add the `baseOffset` to convert the relative `blockOffset` to an absolute position.
+- ビット 0: 設定されている場合、ノードにはより低いインデックスの子があります
+- ビット 1: 設定されている場合、ノードにはより高いインデックスの子があります
+- ビット 2-31: より高いインデックスの子のシフトされた相対オフセット
 
-**Step 3: Initialize Tree Navigation**
-- Using the `blockOffset` calculated above, begin traversal at the root of the block's binary tree structure
+データノードはユーザー定義データを含みます。
 
-**Step 4: Navigate Binary Tree**
-For each level of the tree (iterating through bit positions 8, 4, 2, 1):
+各ブロックは最大 16 要素を持つため、深さは `4` です。
 
-**Step 4a: Read Node Descriptor**
-- Decode the current node's control value, which contains navigation flags and child offset information
-- Extract flags indicating the presence of left and right child nodes
-- Extract the relative offset to the right child node (if present)
+### ルックアップアルゴリズムの手順
 
-**Step 4b: Determine Navigation Direction**
-- Test the current bit position against the target index
-- If the bit is set in the target index, attempt to navigate to the right child
-- If the bit is clear in the target index, attempt to navigate to the left child
+**ステップ 1: ヘッダーの読み取り**
 
-**Step 4c: Follow Navigation Path**
-- If the desired child exists (indicated by the appropriate flag), update the current position
-- For right child navigation, add the encoded offset to the current position
-- For left child navigation, move to the position immediately following the current node
-- Continue to the next bit level if navigation was successful
+- 配列から可変長エンコードされたヘッダー値をデコードします
+- ビット 0-1 からエントリインデックスサイズを抽出します（0=uint8, 1=uint16, 2=uint32 オフセット）
+- ヘッダー値を右に 2 ビットシフトして、ビット 2-31 から要素の総数を抽出します
+- この情報を使用して、ブロックインデックスエントリの解釈方法を決定し、配列境界を検証します
 
-**Step 5: Return Element Location**
-- Upon successful traversal, return the final offset position which points to the stored data.
-- If traversal is not successful (child node does not exist), the element can not be found in the array and return a failure status.
+**ステップ 2: ブロックオフセットの計算**
 
-## Hashtable
+- ターゲット要素を含むブロックインデックス `blockIndex` を、インデックスをブロックサイズ（16）で割ることによって決定します。
+- ブロックオフセットを含むメモリ位置 `pBlockOffset = baseOffset + entrySize * blockIndex` を計算します。ここで `baseOffset` はヘッダー直後のアドレスであり、`entrySize` はヘッダーの下位ビットによって決定されます。
+- 計算された `pBlockOffset` とヘッダーによって決定されたエントリサイズを使用して、ブロックインデックステーブルからブロックオフセット `blockOffset` を読み取ります。
+- 相対 `blockOffset` を絶対位置に変換するために `baseOffset` を加算します。
 
-Conceptually, a native hash table is a header that describe the dimensions of the table, a table that maps hash values of the keys to buckets followed with a list of buckets that store the values. These three things are stored consecutively in the format.
+**ステップ 3: ツリーナビゲーションの初期化**
 
-To make look up fast, the number of buckets is always a power of 2. The table is simply a sequence of `(1 + number of buckets)` cells, for the first `(number of buckets)` cells, its stores the offset of the bucket list from the beginning of the whole native hash table. The last cell stores the offset to the end of the buckets. Entries are mapped to buckets using `x` lowest bits of the hash not in the lowest byte where `2^x = (number of buckets)`. For example, if `x=2` the following bits marked with `X` would be used in a 32-bit hash `b00000000_00000000_000000XX_00000000`.
+- 上記で計算された `blockOffset` を使用して、ブロックのバイナリツリー構造のルートから探索を開始します
 
-Physically, the header is a single byte. The most significant six bits is used to store the number of buckets in its base-2 logarithm. The remaining two bits are used for storing the entry size, as explained below:
+**ステップ 4: バイナリツリーのナビゲーション**
+ツリーの各レベルに対して（ビット位置 8, 4, 2, 1 を反復）:
 
-Because the offsets to the bucket lists are often small numbers, the table cells are variable sized.
-It could be either 1 byte, 2 bytes or 4 bytes. The three cases are described with two bits. `00` means it is one byte, `01` means it is two bytes and `10` means it is four bytes.
+**ステップ 4a: ノードディスクリプタの読み取り**
 
-The remaining data are the entries. The entries has only the least significant byte of the hash code, followed by the offset to the actual object stored in the hash table. The entries are sorted by hash code.
+- 現在のノードの制御値をデコードします。ナビゲーションフラグと子オフセット情報が含まれます
+- 左右の子ノードの存在を示すフラグを抽出します
+- 右の子ノードへの相対オフセットを抽出します（存在する場合）
 
-To perform a lookup, one starts with reading the header, computing the hash code, using the number of buckets to determine the number of bits to mask away from the hash code, look it up in the table using the right pointer size, find the bucket list, find the next bucket list (or the end of the table) so that we know where to stop, search the entries in that list and then we will find the object if we have a hit, or we have a miss.
+**ステップ 4b: ナビゲーション方向の決定**
 
-To enumerate all the values, simply walk from the first entry and go all the way to the end of the hash table.
+- 現在のビット位置をターゲットインデックスに対してテストします
+- ターゲットインデックスでビットが設定されている場合、右の子にナビゲートを試みます
+- ターゲットインデックスでビットがクリアされている場合、左の子にナビゲートを試みます
 
-To see this in action, we can take a look at the following example, with these objects placed in the native hash table.
+**ステップ 4c: ナビゲーションパスの追跡**
 
-| Object | HashCode |
-|:-------|:--------:|
-| P      | 0x1231   |
-| Q      | 0x1232   |
-| R      | 0x1234   |
-| S      | 0x1338   |
+- 目的の子が存在する場合（適切なフラグで示される）、現在の位置を更新します
+- 右の子ナビゲーションの場合、エンコードされたオフセットを現在の位置に加算します
+- 左の子ナビゲーションの場合、現在のノードの直後の位置に移動します
+- ナビゲーションが成功した場合、次のビットレベルに進みます
 
-Suppose we decided to have only two buckets, then only the 9th bit will be used to index the table, the whole hash table will look like this:
+**ステップ 5: 要素位置の返却**
 
-| Part    | Offset | Content  | Meaning                                                                                                                                                                                   |
-|:--------|:-------|:--------:|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Header  | 0      | 0x04     | This is the header, the least significant bit is `00`, therefore the table cell is just one byte. The most significant six bit represents 1, which means the number of buckets is 2^1 = 2. |
-| Table   | 1      | 0x04     | This is the representation of the unsigned integer 4, which correspond to the offset of the bucket correspond to hash code `0`.                                                           |
-| Table   | 2      | 0x0A     | This is the representation of the unsigned integer 10, which correspond to the offset of the bucket correspond to hash code `1`.                                                          |
-| Table   | 3      | 0x0C     | This is the representation of the unsigned integer 12, which correspond to the offset of the end of the whole hash table.                                                                 |
-| Bucket1 | 4      | 0x31     | This is the least significant byte of the hash code of P                                                                                                                                  |
-| Bucket1 | 5      | P        | This should be the offset to the object P                                                                                                                                                 |
-| Bucket1 | 6      | 0x32     | This is the least significant byte of the hash code of Q                                                                                                                                  |
-| Bucket1 | 7      | Q        | This should be the offset to the object Q                                                                                                                                                 |
-| Bucket1 | 8      | 0x34     | This is the least significant byte of the hash code of R                                                                                                                                  |
-| Bucket1 | 9      | R        | This should be the offset to the object R                                                                                                                                                 |
-| Bucket2 | 10     | 0x38     | This is the least significant byte of the hash code of S                                                                                                                                  |
-| Bucket2 | 11     | S        | This should be the offset to the object S                                                                                                                                                 |
+- 探索が成功した場合、格納されたデータを指す最終オフセット位置を返します。
+- 探索が成功しない場合（子ノードが存在しない）、要素は配列内に見つからず、失敗ステータスを返します。
 
+## ハッシュテーブル
 
+概念的に、ネイティブハッシュテーブルは、テーブルの次元を記述するヘッダー、キーのハッシュ値をバケット (bucket) にマッピングするテーブル、および値を格納するバケットのリストで構成されます。これら 3 つのものはフォーマット内で連続して格納されます。
 
-# Helper calls
+ルックアップを高速にするために、バケット数は常に 2 のべき乗です。テーブルは単純に `(1 + バケット数)` セルのシーケンスです。最初の `(バケット数)` セルについては、ネイティブハッシュテーブル全体の先頭からのバケットリストのオフセットを格納します。最後のセルはバケットの終端へのオフセットを格納します。エントリは、`2^x = (バケット数)` として、最下位バイトにないハッシュの `x` 個の最下位ビットを使用してバケットにマッピングされます。たとえば、`x=2` の場合、32 ビットハッシュの以下の `X` でマークされたビットが使用されます: `b00000000_00000000_000000XX_00000000`。
 
-List of helper calls supported by READYTORUN_FIXUP_Helper:
+物理的には、ヘッダーは単一バイトです。最上位 6 ビットは、バケット数の 2 を底とする対数を格納するために使用されます。残りの 2 ビットは、以下で説明するエントリサイズの格納に使用されます:
+
+バケットリストへのオフセットは多くの場合小さい数値であるため、テーブルセルのサイズは可変です。1 バイト、2 バイト、または 4 バイトのいずれかです。3 つのケースは 2 ビットで記述されます。`00` は 1 バイト、`01` は 2 バイト、`10` は 4 バイトを意味します。
+
+残りのデータはエントリです。エントリには、ハッシュコードの最下位バイトのみと、ハッシュテーブルに格納された実際のオブジェクトへのオフセットが含まれます。エントリはハッシュコードでソートされています。
+
+ルックアップを実行するには、まずヘッダーを読み、ハッシュコードを計算し、バケット数を使用してハッシュコードからマスクするビット数を決定し、適切なポインタサイズを使用してテーブル内で検索し、バケットリストを見つけ、次のバケットリスト（またはテーブルの終端）を見つけて停止位置を知り、そのリスト内のエントリを検索します。ヒットした場合はオブジェクトが見つかり、そうでなければミスです。
+
+すべての値を列挙するには、最初のエントリからハッシュテーブルの終端まで単純にウォークします。
+
+これを実際に確認するために、以下のオブジェクトをネイティブハッシュテーブルに配置した例を見てみましょう。
+
+| オブジェクト | ハッシュコード |
+| :----------- | :------------: |
+| P            |     0x1231     |
+| Q            |     0x1232     |
+| R            |     0x1234     |
+| S            |     0x1338     |
+
+バケット数を 2 に決定した場合、9 番目のビットのみがテーブルのインデックスに使用され、ハッシュテーブル全体は以下のようになります:
+
+| パート    | オフセット | 内容 | 意味                                                                                                                                       |
+| :-------- | :--------- | :--: | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| ヘッダー  | 0          | 0x04 | これはヘッダーで、最下位ビットが `00` のため、テーブルセルは 1 バイトです。最上位 6 ビットは 1 を表し、バケット数は 2^1 = 2 を意味します。 |
+| テーブル  | 1          | 0x04 | これは符号なし整数 4 の表現で、ハッシュコード `0` に対応するバケットのオフセットに対応します。                                             |
+| テーブル  | 2          | 0x0A | これは符号なし整数 10 の表現で、ハッシュコード `1` に対応するバケットのオフセットに対応します。                                            |
+| テーブル  | 3          | 0x0C | これは符号なし整数 12 の表現で、ハッシュテーブル全体の終端のオフセットに対応します。                                                       |
+| バケット1 | 4          | 0x31 | これは P のハッシュコードの最下位バイトです                                                                                                |
+| バケット1 | 5          |  P   | これはオブジェクト P へのオフセットです                                                                                                    |
+| バケット1 | 6          | 0x32 | これは Q のハッシュコードの最下位バイトです                                                                                                |
+| バケット1 | 7          |  Q   | これはオブジェクト Q へのオフセットです                                                                                                    |
+| バケット1 | 8          | 0x34 | これは R のハッシュコードの最下位バイトです                                                                                                |
+| バケット1 | 9          |  R   | これはオブジェクト R へのオフセットです                                                                                                    |
+| バケット2 | 10         | 0x38 | これは S のハッシュコードの最下位バイトです                                                                                                |
+| バケット2 | 11         |  S   | これはオブジェクト S へのオフセットです                                                                                                    |
+
+# ヘルパー呼び出し
+
+READYTORUN_FIXUP_Helper がサポートするヘルパー呼び出しの一覧:
 
 ```C++
 enum ReadyToRunHelper
@@ -973,6 +896,6 @@ enum ReadyToRunHelper
 };
 ```
 
-# References
+# 参考文献
 
 [ECMA-335](https://www.ecma-international.org/publications-and-standards/standards/ecma-335)

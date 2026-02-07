@@ -1,128 +1,142 @@
-# Cross-platform Minidumps
+# クロスプラットフォームミニダンプ
 
 ::: info 原文
 この章の原文は [Cross-platform Minidumps](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/xplat-minidump-generation.md) です。
 :::
 
-Dump generation on Windows, Linux and other non-Windows platforms has several challenges. Dumps can be very large and the default name/location of a dump is not consistent across all our supported platforms.  The size of a full core dumps can be controlled somewhat with the "coredump_filter" file/flags but even with the smallest settings may be still too large and may not contain all the managed state needed for debugging. By default, some platforms use _core_ as the name and place the core dump in the current directory from where the program is launched; others add the _pid_ to the name. Configuring the core name and location requires superuser permission. Requiring superuser to make this consistent is not a satisfactory option.
+## はじめに
 
-Our goal is to generate core dumps that are on par with WER (Windows Error Reporting) crash dumps on any supported Linux platform. To the very least we want to enable the following:
-- automatic generation of minimal size minidumps. The quality and quantity of the information contained in the dump should be on par with the information contained in a traditional Windows mini-dump.
-- simple configurability by the user (not _su_!).
+Windows、Linux、およびその他の非 Windows プラットフォームにおけるダンプ (dump) 生成にはいくつかの課題があります。ダンプは非常に大きくなる可能性があり、ダンプのデフォルトの名前や保存場所はサポートされているすべてのプラットフォームで一貫していません。フルコアダンプ (full core dump) のサイズは「coredump*filter」ファイル/フラグによってある程度制御できますが、最小の設定でも依然として大きすぎる場合があり、デバッグに必要なすべてのマネージド状態 (managed state) が含まれていない可能性があります。デフォルトでは、一部のプラットフォームは \_core* という名前を使用し、プログラムが起動されたカレントディレクトリにコアダンプを配置します。他のプラットフォームでは名前に _pid_ を追加します。コア名と保存場所の構成にはスーパーユーザー権限が必要です。一貫性のためにスーパーユーザー権限を要求するのは満足のいく選択肢ではありません。
 
-Our solution at this time is to intercept any unhandled exception in the PAL layer of the runtime and have coreclr itself trigger and generate a "mini" core dump.
+::: tip 💡 初心者向け補足
+ダンプ (dump) とは、プログラムがクラッシュした際にメモリの内容をファイルに保存したものです。Java でいうところのヒープダンプやスレッドダンプに近い概念です。このファイルを後からデバッガで開くことで、クラッシュ時のプログラムの状態を調査できます。「ミニダンプ (minidump)」は、すべてのメモリではなく、デバッグに必要な最小限の情報だけを含むダンプです。
+:::
 
-# Design #
+私たちの目標は、サポートされている任意の Linux プラットフォーム上で、WER（Windows エラー報告）のクラッシュダンプと同等のコアダンプを生成することです。少なくとも以下を実現したいと考えています：
 
-We looked at the existing technologies like Breakpad and its derivatives (e.g.: an internal MS version called _msbreakpad_ from the SQL team....). Breakpad generates Windows minidumps but they are not compatible with existing tools like Windbg, etc. Msbreakpad even more so. There is a minidump to Linux core conversion utility but it seems like a wasted extra step. _Breakpad_ does allow the minidump to be generated in-process inside the signal handlers. It restricts the APIs to what was allowed in a "async" signal handler (like SIGSEGV) and has a small subset of the C++ runtime that was also similarly constrained. We also need to add the set of memory regions for the "managed" state which requires loading and using the _DAC_'s (*) enumerate memory interfaces. Loading modules is not allowed in an async signal handler but forking/execve is allowed so launching an utility that loads the _DAC_, enumerates the list of memory regions and writes the dump is the only reasonable option. It would also allow uploading the dump to a server too.
+- 最小サイズのミニダンプの自動生成。ダンプに含まれる情報の品質と量は、従来の Windows ミニダンプに含まれる情報と同等であること。
+- ユーザーによる簡単な構成（_su_ ではなく！）。
 
-\* The _DAC_ is a special build of parts of the coreclr runtime that allows inspection of the runtime's managed state (stacks, variables, GC state heaps) out of context. One of the many interfaces it provides is [ICLRDataEnumMemoryRegions](https://github.com/dotnet/runtime/blob/main/src/coreclr/debug/daccess/dacimpl.h) which enumerates all the managed state a minidump would require to enable a fruitful debugging experience.
+現時点での解決策は、ランタイムの PAL レイヤーで未処理の例外 (unhandled exception) をインターセプトし、coreclr 自身が「ミニ」コアダンプの生成をトリガーすることです。
 
-_Breakpad_ could have still been used out of context in the generation utility but there seemed no value to their Windows-like minidump format when it would have to be converted to the native Linux core format away because in most scenarios using the platform tools like _lldb_ is necessary. It also adds a coreclr build dependency on Google's _Breakpad_ or SQL's _msbreakpad_ source repo. The only advantage is that the breakpad minidumps may be a little smaller because minidumps memory regions are byte granule and Linux core memory regions need to be page granule.
+## 設計
 
-# Implementation Details #
+Breakpad やその派生（例：SQL チームの内部 MS バージョンである _msbreakpad_ など）のような既存の技術を検討しました。Breakpad は Windows ミニダンプを生成しますが、Windbg などの既存のツールとは互換性がありません。Msbreakpad はさらに互換性がありません。ミニダンプから Linux コアへの変換ユーティリティがありますが、余分な手順に思えます。_Breakpad_ はシグナルハンドラ (signal handler) 内でプロセス内 (in-process) にミニダンプを生成することができます。「非同期」シグナルハンドラ（SIGSEGV など）で許可される API に制限し、同様に制約された C++ ランタイムの小さなサブセットを持っています。さらに、「マネージド」状態のメモリ領域のセットを追加する必要があり、これには _DAC_ の（\*）メモリ列挙インターフェイスのロードと使用が必要です。非同期シグナルハンドラではモジュールのロードは許可されていませんが、fork/execve は許可されているため、_DAC_ をロードし、メモリ領域のリストを列挙し、ダンプを書き込むユーティリティを起動するのが唯一の合理的な選択肢です。これにより、ダンプをサーバーにアップロードすることも可能になります。
 
-### Linux ###
+::: tip 💡 初心者向け補足
+_DAC_（Data Access Component）は、coreclr ランタイムの一部を特別にビルドしたもので、マネージド状態（スタック、変数、GC 状態のヒープなど）をプロセス外から検査できるようにするものです。Java でいえば、JVM の内部状態を外部ツールから読み取るための仕組みに相当します。シグナルハンドラ（SIGSEGV などのクラッシュシグナルを受け取る関数）内では安全に呼べる API が限られているため、fork で子プロセスを生成し、そこで DAC をロードしてダンプを書き出す設計になっています。
+:::
 
-Core dump generation is triggered anytime coreclr is going to abort (via [PROCAbort()](https://github.com/dotnet/runtime/blob/main/src/coreclr/pal/src/include/pal/process.h)) the process because of an unhandled managed exception or an async signal like SIGSEGV, SIGILL, SIGFPE, etc. The _createdump_ utility is located in the same directory as libcoreclr.so and is launched with fork/execve. The child _createdump_ process is given permission to ptrace and access to the various special /proc files of the crashing process which waits until _createdump_ finishes.
+\* _DAC_ は coreclr ランタイムの一部を特別にビルドしたもので、ランタイムのマネージド状態（スタック、変数、GC 状態のヒープ）をコンテキスト外から検査できるようにします。提供される多くのインターフェイスの一つが [ICLRDataEnumMemoryRegions](https://github.com/dotnet/runtime/blob/main/src/coreclr/debug/daccess/dacimpl.h) で、ミニダンプが実りあるデバッグ体験を実現するために必要なすべてのマネージド状態を列挙します。
 
-The _createdump_ utility starts by using ptrace to enumerate and suspend all the threads in the target process. The process and thread info (status, registers, etc.) is gathered. The auxv entries and _DSO_ info is enumerated. _DSO_ is the in memory data structures that described the shared modules loaded by the target. This memory is needed in the dump by gdb and lldb to enumerate the shared modules loaded and access their symbols. The module memory mappings are gathered from /proc/$pid/maps. None of the program or shared modules memory regions are explicitly added to dump's memory regions. The _DAC_ is loaded and the enumerate memory region interfaces are used to build the memory regions list just like on Windows. The threads stacks and one page of code around the IP are added. The byte sized regions are rounded up to pages and then combined into contiguous regions.
+_Breakpad_ は生成ユーティリティ内でコンテキスト外で使用することもできましたが、ほとんどのシナリオでは _lldb_ のようなプラットフォームツールの使用が必要になるため、ネイティブの Linux コア形式に変換しなければならない Windows 風のミニダンプ形式に価値はないと判断しました。また、Google の _Breakpad_ や SQL の _msbreakpad_ ソースリポジトリへの coreclr ビルド依存関係が追加されます。唯一の利点は、Breakpad のミニダンプはメモリ領域がバイト粒度であるのに対し、Linux コアのメモリ領域はページ粒度である必要があるため、若干小さくなる可能性があることです。
 
-All the memory mappings from /proc/$pid/maps are in the PT_LOAD sections even though the memory is not actually in the dump. They have a file offset/size of 0.
+## 実装の詳細
 
-After all the process crash information has been gathered, the ELF core dump is written. The main ELF header created and written. The PT\_LOAD note section is written one entry for each memory region in the dump. The process info, auxv data and NT_FILE entries are written to core. The NT\_FILE entries are built from module memory mappings from /proc/$pid/maps. The threads state and registers are then written. Lastly all the memory regions gather above by the _DAC_, etc. are read from the target process and written to the core dump. All the threads in the target process are resumed and _createdump_ terminates.
+### Linux
 
-**Severe memory corruption**
+コアダンプ生成は、未処理のマネージド例外 (unhandled managed exception) や SIGSEGV、SIGILL、SIGFPE などの非同期シグナルにより、coreclr がプロセスをアボート（[PROCAbort()](https://github.com/dotnet/runtime/blob/main/src/coreclr/pal/src/include/pal/process.h) 経由）しようとするたびにトリガーされます。_createdump_ ユーティリティは libcoreclr.so と同じディレクトリに配置されており、fork/execve で起動されます。子プロセスの _createdump_ には ptrace の権限と、クラッシュしたプロセスの各種特殊 /proc ファイルへのアクセス権が与えられ、クラッシュしたプロセスは _createdump_ が完了するまで待機します。
 
-As long as control can making it to the signal/abort handler and the fork/execve of the utility succeeds then the _DAC_ memory enumeration interfaces can handle corruption to a point; the resulting dump just may not have enough managed state to be useful. We could investigate detecting this case and writing a full core dump.
+_createdump_ ユーティリティは、ptrace を使用してターゲットプロセスのすべてのスレッドを列挙し、サスペンドすることから始まります。プロセスとスレッドの情報（ステータス、レジスタなど）が収集されます。auxv エントリと _DSO_ 情報が列挙されます。_DSO_ はターゲットによってロードされた共有モジュール (shared module) を記述するメモリ内データ構造です。このメモリは、ロードされた共有モジュールを列挙しそのシンボルにアクセスするために、gdb や lldb がダンプ内で必要とします。モジュールのメモリマッピングは /proc/$pid/maps から収集されます。プログラムや共有モジュールのメモリ領域はダンプのメモリ領域に明示的には追加されません。_DAC_ がロードされ、Windows と同様にメモリ領域列挙インターフェイスを使用してメモリ領域リストが構築されます。スレッドスタックと IP 周辺の 1 ページ分のコードが追加されます。バイトサイズの領域はページ単位に切り上げられ、連続した領域に結合されます。
 
-**Stack overflow exception**
+/proc/$pid/maps からのすべてのメモリマッピングは、実際にはメモリがダンプに含まれていなくても PT_LOAD セクションに含まれます。これらのファイルオフセット/サイズは 0 です。
 
-Like the severe memory corruption case, if the signal handler (`SIGSEGV`) gets control it can detect most stack overflow cases and does trigger a core dump. There are still many cases where this doesn't happen and the OS just terminates the process. There is a bug in the earlier versions (2.1.x or less) of the runtime where _createdump_ isn't invoked for any stack overflow.
+すべてのプロセスクラッシュ情報が収集された後、ELF コアダンプが書き込まれます。メインの ELF ヘッダーが作成・書き込みされます。PT_LOAD ノートセクションがダンプ内の各メモリ領域ごとに 1 エントリずつ書き込まれます。プロセス情報、auxv データ、NT*FILE エントリがコアに書き込まれます。NT_FILE エントリは /proc/$pid/maps からのモジュールメモリマッピングから構築されます。次にスレッドの状態とレジスタが書き込まれます。最後に、\_DAC* などによって上記で収集されたすべてのメモリ領域がターゲットプロセスから読み取られ、コアダンプに書き込まれます。ターゲットプロセスのすべてのスレッドが再開され、_createdump_ は終了します。
 
-### FreeBSD/OpenBSD/NetBSD ###
+::: tip 💡 初心者向け補足
+ELF（Executable and Linkable Format）は Linux で使われる実行ファイルやコアダンプの標準的なファイル形式です。コアダンプには PT*LOAD セクション（メモリ領域の内容）やノートセクション（スレッド情報やレジスタの値など）が含まれます。\_createdump* は ptrace というシステムコールを使って、対象プロセスのメモリやレジスタを外部から読み取ります。これは Java の jmap や jstack が JVM の内部状態を取得するのと似た仕組みです。
+:::
 
-There will be some differences gathering the crash information but these platforms still use ELF format core dumps so that part of the utility should be much different. The mechanism used for Linux to give _createdump_ permission to use ptrace and access the /proc doesn't exists on these platforms.
+**深刻なメモリ破壊**
 
-### macOS ###
+シグナル/アボートハンドラに制御が到達でき、ユーティリティの fork/execve が成功しさえすれば、_DAC_ のメモリ列挙インターフェイスはある程度の破壊を処理できます。ただし、結果として得られるダンプには有用なマネージド状態が十分に含まれていない可能性があります。このケースを検出してフルコアダンプを書き込むことを検討することもできます。
 
-On .NET 5.0, createdump supported generating dumps on macOS but instead of the MachO dump format, it generates the ELF coredumps. This wad because of time constraints developing a MachO dump writer on the generation side and a MachO reader for the diagnostics tooling side (dotnet-dump and CLRMD). This means the native debuggers like gdb and lldb will not work with dumps obtained from apps running on a 5.0 runtime, but the dotnet-dump tool will allow the managed state to be analyzed. Because of this behavior an additional environment variable will need to be set (COMPlus_DbgEnableElfDumpOnMacOS=1) along with the ones below in the Configuration/Policy section.
+**スタックオーバーフロー例外**
 
-Starting .NET 6.0, native Mach-O core files get generated and the variable COMPlus_DbgEnableElfDumpOnMacOS has been deprecated.
+深刻なメモリ破壊のケースと同様に、シグナルハンドラ（`SIGSEGV`）が制御を取得できれば、ほとんどのスタックオーバーフローのケースを検出でき、コアダンプをトリガーします。ただし、これが発生せず OS がプロセスを単純に終了してしまうケースも多くあります。ランタイムの初期バージョン（2.1.x 以前）には、スタックオーバーフロー時に _createdump_ が起動されないバグがあります。
 
-### Windows ###
+### FreeBSD/OpenBSD/NetBSD
 
-As of .NET 5.0, createdump and the below configuration environment variables are supported on Windows. It is implemented using the Windows MiniDumpWriteDump API. This allows consistent crash/unhandled exception dumps across all of our platforms.
+クラッシュ情報の収集にはいくつかの違いがありますが、これらのプラットフォームは依然として ELF 形式のコアダンプを使用するため、ユーティリティのその部分はあまり異ならないはずです。Linux で _createdump_ に ptrace の使用権限と /proc へのアクセス権限を付与するために使用されるメカニズムは、これらのプラットフォームには存在しません。
 
-# Configuration/Policy #
+### macOS
 
-NOTE: Core dump generation in docker containers require the ptrace capability (--cap-add=SYS_PTRACE or --privileged run/exec options).
+.NET 5.0 では、createdump は macOS でのダンプ生成をサポートしていましたが、MachO ダンプ形式の代わりに ELF コアダンプを生成していました。これは、生成側の MachO ダンプライターと診断ツール側（dotnet-dump および CLRMD）の MachO リーダーの開発の時間的制約によるものでした。これは、5.0 ランタイムで動作するアプリから取得したダンプでは gdb や lldb のようなネイティブデバッガが動作しないことを意味しますが、dotnet-dump ツールを使用すればマネージド状態を分析できます。この動作のため、以下の「構成/ポリシー」セクションの環境変数に加えて、追加の環境変数（COMPlus_DbgEnableElfDumpOnMacOS=1）を設定する必要がありました。
 
-Any configuration or policy is set with environment variables which are passed as options to the _createdump_ utility.
+.NET 6.0 からは、ネイティブの Mach-O コアファイルが生成されるようになり、変数 COMPlus_DbgEnableElfDumpOnMacOS は非推奨となりました。
 
-Environment variables supported:
+### Windows
 
-- `DOTNET_DbgEnableMiniDump`: if set to "1", enables this core dump generation. The default is NOT to generate a dump.
-- `DOTNET_DbgMiniDumpType`: See below. Default is "2" MiniDumpWithPrivateReadWriteMemory.
-- `DOTNET_DbgMiniDumpName`: if set, use as the template to create the dump path and file name. See "Dump name formatting" for how the dump name can be formatted. The default is _/tmp/coredump.%p_.
-- `DOTNET_DbgCreateDumpToolPath`: **(NativeAOT only)** if set, specifies the directory path where the createdump tool is located. The runtime will look for the createdump binary in this directory. This is useful in scenarios where createdump is not shipped with the runtime and you need to "bring your own" dump generation tool. This environment variable is only supported in NativeAOT applications and ignored otherwise.
-- `DOTNET_CreateDumpDiagnostics`: if set to "1", enables the _createdump_ utilities diagnostic messages (TRACE macro).
-- `DOTNET_CreateDumpVerboseDiagnostics`: if set to "1", enables the _createdump_ utilities verbose diagnostic messages (TRACE_VERBOSE macro).
-- `DOTNET_CreateDumpLogToFile`: if set, it is the path of the file to write the _createdump_ diagnostic messages.
-- `DOTNET_EnableCrashReport`: In .NET 6.0 or greater, if set to "1", createdump also generates a json formatted crash report which includes information about the threads and stack frames of the crashing application. The crash report name is the dump path/name with _.crashreport.json_ appended.
-- `DOTNET_EnableCrashReportOnly`: In .NET 7.0 or greater, same as DOTNET_EnableCrashReport except the core dump is not generated.
+.NET 5.0 以降、createdump と以下の構成環境変数は Windows でもサポートされています。Windows の MiniDumpWriteDump API を使用して実装されています。これにより、すべてのプラットフォームで一貫したクラッシュ/未処理例外のダンプが可能になります。
 
-DOTNET_DbgMiniDumpType values:
+## 構成/ポリシー
 
+注意: Docker コンテナ内でのコアダンプ生成には ptrace ケーパビリティが必要です（--cap-add=SYS_PTRACE または --privileged の run/exec オプション）。
 
-|Value|Minidump Enum|Description|
-|-|:----------:|----------|
-|1| MiniDumpNormal                               | Include just the information necessary to capture stack traces for all existing threads in a process. Limited GC heap memory and information. |
-|2| MiniDumpWithPrivateReadWriteMemory (default) | Includes the GC heaps and information necessary to capture stack traces for all existing threads in a process. |
-|3| MiniDumpFilterTriage                         | Include just the information necessary to capture stack traces for all existing threads in a process. Limited GC heap memory and information. |
-|4| MiniDumpWithFullMemory                       | Include all accessible memory in the process. The raw memory data is included at the end, so that the initial structures can be mapped directly without the raw memory information. This option can result in a very large file. |
+すべての構成やポリシーは環境変数で設定され、_createdump_ ユーティリティにオプションとして渡されます。
 
-(Please refer to MSDN for the meaning of the [minidump enum values](https://msdn.microsoft.com/en-us/library/windows/desktop/ms680519(v=vs.85).aspx) reported above)
+サポートされている環境変数：
 
-**Command Line Usage**
+- `DOTNET_DbgEnableMiniDump`: 「1」に設定すると、このコアダンプ生成が有効になります。デフォルトではダンプは生成されません。
+- `DOTNET_DbgMiniDumpType`: 以下を参照。デフォルトは「2」（MiniDumpWithPrivateReadWriteMemory）。
+- `DOTNET_DbgMiniDumpName`: 設定された場合、ダンプのパスとファイル名を作成するテンプレートとして使用されます。ダンプ名のフォーマット方法については「ダンプ名のフォーマット」を参照してください。デフォルトは _/tmp/coredump.%p_ です。
+- `DOTNET_DbgCreateDumpToolPath`: **（NativeAOT のみ）** 設定された場合、createdump ツールが配置されているディレクトリパスを指定します。ランタイムはこのディレクトリ内の createdump バイナリを探します。これは、createdump がランタイムに同梱されておらず、独自のダンプ生成ツールを「持ち込む」必要があるシナリオで有用です。この環境変数は NativeAOT アプリケーションでのみサポートされ、それ以外では無視されます。
+- `DOTNET_CreateDumpDiagnostics`: 「1」に設定すると、_createdump_ ユーティリティの診断メッセージ（TRACE マクロ）が有効になります。
+- `DOTNET_CreateDumpVerboseDiagnostics`: 「1」に設定すると、_createdump_ ユーティリティの詳細な診断メッセージ（TRACE_VERBOSE マクロ）が有効になります。
+- `DOTNET_CreateDumpLogToFile`: 設定された場合、_createdump_ の診断メッセージを書き込むファイルのパスです。
+- `DOTNET_EnableCrashReport`: .NET 6.0 以降で「1」に設定すると、createdump はクラッシュしたアプリケーションのスレッドとスタックフレームに関する情報を含む JSON 形式のクラッシュレポートも生成します。クラッシュレポート名は、ダンプのパス/名前に _.crashreport.json_ を付加したものです。
+- `DOTNET_EnableCrashReportOnly`: .NET 7.0 以降で、DOTNET_EnableCrashReport と同じですが、コアダンプは生成されません。
 
-The createdump utility can also be run from the command line on arbitrary .NET Core processes. The type of dump can be controlled with the below command switches. The default is a "minidump" which contains the majority the memory and managed state needed. Unless you have ptrace (CAP_SYS_PTRACE) administrative privilege, you need to run with sudo or su. The same as if you were attaching with lldb or other native debugger.
+DOTNET_DbgMiniDumpType の値：
+
+| 値  |                 ミニダンプ列挙値                 | 説明                                                                                                                                                                                                             |
+| --- | :----------------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   |                  MiniDumpNormal                  | プロセス内のすべての既存スレッドのスタックトレースをキャプチャするために必要な情報のみを含みます。GC ヒープメモリと情報は限定的です。                                                                            |
+| 2   | MiniDumpWithPrivateReadWriteMemory（デフォルト） | GC ヒープと、プロセス内のすべての既存スレッドのスタックトレースをキャプチャするために必要な情報を含みます。                                                                                                      |
+| 3   |               MiniDumpFilterTriage               | プロセス内のすべての既存スレッドのスタックトレースをキャプチャするために必要な情報のみを含みます。GC ヒープメモリと情報は限定的です。                                                                            |
+| 4   |              MiniDumpWithFullMemory              | プロセス内のすべてのアクセス可能なメモリを含みます。生のメモリデータは末尾に含まれるため、初期構造は生のメモリ情報なしに直接マッピングできます。このオプションは非常に大きなファイルを生成する可能性があります。 |
+
+（上記のミニダンプ列挙値の意味については、MSDN の[ミニダンプ列挙値](<https://msdn.microsoft.com/en-us/library/windows/desktop/ms680519(v=vs.85).aspx>)を参照してください）
+
+**コマンドラインの使用法**
+
+createdump ユーティリティは、任意の .NET Core プロセスに対してコマンドラインから実行することもできます。ダンプの種類は以下のコマンドスイッチで制御できます。デフォルトは、必要なメモリとマネージド状態の大部分を含む「ミニダンプ」です。ptrace（CAP_SYS_PTRACE）の管理者権限がない限り、sudo または su で実行する必要があります。これは lldb やその他のネイティブデバッガでアタッチする場合と同じです。
 
 ```
 createdump [options] pid
--f, --name - dump path and file name. The default is '/tmp/coredump.%p'. These specifiers are substituted with following values:
-   %p  PID of dumped process.
-   %e  The process executable filename.
-   %h  Hostname return by gethostname().
-   %t  Time of dump, expressed as seconds since the Epoch, 1970-01-01 00:00:00 +0000 (UTC).
--n, --normal - create minidump.
--h, --withheap - create minidump with heap (default).
--t, --triage - create triage minidump.
--u, --full - create full core dump.
--d, --diag - enable diagnostic messages.
--v, --verbose - enable verbose diagnostic messages.
--l, --logtofile - file path and name to log diagnostic messages.
---crashreport - write crash report file (dump file path + .crashreport.json).
---crashreportonly - write crash report file only (no dump).
---crashthread <id> - the thread id of the crashing thread.
---signal <code> - the signal code of the crash.
---singlefile - enable single-file app check.
+-f, --name - ダンプのパスとファイル名。デフォルトは '/tmp/coredump.%p'。以下の指定子は対応する値に置換されます：
+   %p  ダンプされるプロセスの PID
+   %e  プロセスの実行ファイル名
+   %h  gethostname() が返すホスト名
+   %t  ダンプの時刻。エポック（1970-01-01 00:00:00 +0000 (UTC)）からの秒数で表現
+-n, --normal - ミニダンプを作成
+-h, --withheap - ヒープ付きミニダンプを作成（デフォルト）
+-t, --triage - トリアージミニダンプを作成
+-u, --full - フルコアダンプを作成
+-d, --diag - 診断メッセージを有効化
+-v, --verbose - 詳細な診断メッセージを有効化
+-l, --logtofile - 診断メッセージを記録するファイルのパスと名前
+--crashreport - クラッシュレポートファイルを書き込み（ダンプファイルパス + .crashreport.json）
+--crashreportonly - クラッシュレポートファイルのみを書き込み（ダンプなし）
+--crashthread <id> - クラッシュしたスレッドのスレッド ID
+--signal <code> - クラッシュのシグナルコード
+--singlefile - シングルファイルアプリのチェックを有効化
 ```
 
-**Dump name formatting**
+**ダンプ名のフォーマット**
 
-As of .NET 5.0, the following subset of the core pattern (see [core](https://man7.org/linux/man-pages/man5/core.5.html)) dump name formatting is supported:
+.NET 5.0 以降、コアパターン（[core](https://man7.org/linux/man-pages/man5/core.5.html) を参照）のダンプ名フォーマットの以下のサブセットがサポートされています：
 
-    %%  A single % character.
-    %d  PID of dumped process (for backwards createdump compatibility).
-    %p  PID of dumped process.
-    %e  The process executable filename.
-    %h  Hostname return by gethostname().
-    %t  Time of dump, expressed as seconds since the Epoch, 1970-01-01 00:00:00 +0000 (UTC).
+    %%  単一の % 文字
+    %d  ダンプされるプロセスの PID（createdump の後方互換性のため）
+    %p  ダンプされるプロセスの PID
+    %e  プロセスの実行ファイル名
+    %h  gethostname() が返すホスト名
+    %t  ダンプの時刻。エポック（1970-01-01 00:00:00 +0000 (UTC)）からの秒数で表現
 
-**Using a custom createdump tool (NativeAOT only)**
+**カスタム createdump ツールの使用（NativeAOT のみ）**
 
-In scenarios where the NativeAOT runtime does not ship with the createdump tool, you can specify a custom directory path using the `DOTNET_DbgCreateDumpToolPath` environment variable:
+NativeAOT ランタイムが createdump ツールを同梱していないシナリオでは、`DOTNET_DbgCreateDumpToolPath` 環境変数を使用してカスタムディレクトリパスを指定できます：
 
 ```bash
 export DOTNET_DbgEnableMiniDump=1
@@ -130,8 +144,8 @@ export DOTNET_DbgCreateDumpToolPath=/path/to/directory
 ./myapp
 ```
 
-The runtime will look for the `createdump` binary in the specified directory. This allows you to "bring your own" dump generation tool. Note that this environment variable is only supported in NativeAOT applications and ignored otherwise.
+ランタイムは指定されたディレクトリ内の `createdump` バイナリを探します。これにより、独自のダンプ生成ツールを「持ち込む」ことができます。この環境変数は NativeAOT アプリケーションでのみサポートされ、それ以外では無視されることに注意してください。
 
-# Testing #
+## テスト
 
-The test plan is to modify the SOS tests in the (still) private debuggertests repo to trigger and use the core minidumps generated. Debugging managed core dumps on Linux is not supported by _mdbg_ at this time until we have a ELF core dump reader so only the SOS tests (which use _lldb_ on Linux) will be modified.
+テスト計画は、（まだ非公開の）debuggertests リポジトリの SOS テストを変更して、生成されたコアミニダンプをトリガーし使用することです。Linux 上でのマネージドコアダンプのデバッグは、ELF コアダンプリーダーが実装されるまで _mdbg_ ではサポートされないため、（Linux 上で _lldb_ を使用する）SOS テストのみが変更されます。

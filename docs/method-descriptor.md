@@ -1,76 +1,79 @@
-# Method Descriptor
+# メソッドディスクリプタ (Method Descriptor)
 
 ::: info 原文
 この章の原文は [Method Descriptor](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/method-descriptor.md) です。
 :::
 
-Author: Jan Kotas ([@jkotas](https://github.com/jkotas)) - 2006
+著者: Jan Kotas ([@jkotas](https://github.com/jkotas)) - 2006
 
-Introduction
-============
+## はじめに
 
-MethodDesc (method descriptor) is the internal representation of a managed method. It serves several purposes:
+MethodDesc（メソッドディスクリプタ）は、マネージドメソッドのランタイム内部表現です。以下のような複数の目的を果たします：
 
-- Provides a unique method handle, usable throughout the runtime. For normal methods, the MethodDesc is a unique handle for a <module, metadata token, instantiation> triplet.
-- Caches frequently used information that is expensive to compute from metadata (e.g. whether the method is static).
-- Captures the runtime state of the method (e.g. whether the code has been generated for the method already).
-- Owns the entry point of the method.
+- ランタイム全体で使用可能な一意のメソッドハンドルを提供します。通常のメソッドにおいて、MethodDesc は &lt;モジュール, メタデータトークン, インスタンス化&gt; の三つ組に対する一意のハンドルです。
+- メタデータから計算するとコストが高い、頻繁に使用される情報をキャッシュします（例：メソッドが静的かどうか）。
+- メソッドのランタイム状態を保持します（例：メソッドのコードが既に生成されたかどうか）。
+- メソッドのエントリポイントを所有します。
 
-Design Goals and Non-goals
---------------------------
+::: tip 💡 初心者向け補足
+MethodDesc は、C# で定義したメソッド（例えば `public void MyMethod()`）に対して、.NET ランタイムが内部的に作成するデータ構造です。Java の JVM における「メソッドエリア」に相当する概念で、メソッドに関するあらゆる情報（名前、引数の型、JIT コンパイル済みのネイティブコードへのポインタなど）を一箇所にまとめて管理します。プログラム中のすべてのメソッドに対して 1 つずつ存在します。
+:::
 
-### Goals
+## 設計目標と非目標
 
-**Performance:** The design of MethodDesc is heavily optimized for size, since there is one of them for every method. For example, the MethodDesc for a normal non-generic method is 8 bytes in the current design.
+### 目標
 
-### Non-goals
+**パフォーマンス:** MethodDesc の設計は、すべてのメソッドに 1 つずつ存在するため、サイズの最適化が重点的に行われています。たとえば、通常の非ジェネリックメソッドの MethodDesc は、現在の設計では 8 バイトです。
 
-**Richness:** The MethodDesc does not cache all information about the method. It is expected that the underlying metadata has to be accessed for less frequently used information (e.g. method signature).
+### 非目標
 
-Design of MethodDesc
-====================
+**情報の豊富さ:** MethodDesc はメソッドに関するすべての情報をキャッシュするわけではありません。使用頻度の低い情報（例：メソッドシグネチャ）については、基礎となるメタデータにアクセスする必要があることが前提とされています。
 
-Kinds of MethodDescs
---------------------
+## MethodDesc の設計
 
-There are multiple kinds of MethodDescs:
+## MethodDesc の種類
+
+MethodDesc には複数の種類があります：
 
 **IL**
 
-Used for regular IL methods.
+通常の IL メソッドに使用されます。
 
-**Instantiated**
+**Instantiated（インスタンス化）**
 
-Used for less common IL methods that have generic instantiation or that do not have preallocated slot in method table.
+ジェネリックインスタンス化を持つ IL メソッドや、メソッドテーブルに事前割り当てされたスロットを持たない IL メソッドに使用されます。
 
 **FCall**
 
-Internal methods implemented in unmanaged code. These are [methods marked with MethodImplAttribute(MethodImplOptions.InternalCall) attribute](./corelib), delegate constructors and tlbimp constructors.
+アンマネージドコードで実装された内部メソッドです。これは [MethodImplAttribute(MethodImplOptions.InternalCall) 属性が付与されたメソッド](./corelib)、デリゲートコンストラクタ、および tlbimp コンストラクタです。
 
 **PInvoke**
 
-P/Invoke methods. These are methods marked with DllImport attribute.
+P/Invoke メソッドです。DllImport 属性が付与されたメソッドがこれに該当します。
 
 **EEImpl**
 
-Delegate methods whose implementation is provided by the runtime (Invoke, BeginInvoke, EndInvoke). See [ECMA 335 Partition II - Delegates](https://github.com/dotnet/runtime/blob/main/project/dotnet-standards.md).
+ランタイムによって実装が提供されるデリゲートメソッド（Invoke、BeginInvoke、EndInvoke）です。[ECMA 335 Partition II - Delegates](https://github.com/dotnet/runtime/blob/main/project/dotnet-standards.md) を参照してください。
 
-**Array**
+**Array（配列）**
 
-Array methods whose implementation is provided by the runtime (Get, Set, Address). See [ECMA Partition II – Arrays](https://github.com/dotnet/runtime/blob/main/project/dotnet-standards.md).
+ランタイムによって実装が提供される配列メソッド（Get、Set、Address）です。[ECMA Partition II – Arrays](https://github.com/dotnet/runtime/blob/main/project/dotnet-standards.md) を参照してください。
 
 **ComInterop**
 
-COM interface methods. Since the non-generic interfaces can be used for COM interop by default, this kind is usually used for all interface methods.
+COM インターフェースメソッドです。非ジェネリックインターフェースはデフォルトで COM 相互運用に使用できるため、この種類は通常すべてのインターフェースメソッドに使用されます。
 
-**Dynamic**
+**Dynamic（動的）**
 
-Dynamically created methods without underlying metadata. Produced by Stub-as-IL and LKG (light-weight code generation).
+基礎となるメタデータを持たない、動的に作成されたメソッドです。Stub-as-IL や LKG（軽量コード生成、Light-weight Code Generation）によって生成されます。
 
-Alternative Implementations
----------------------------
+::: tip 💡 初心者向け補足
+これらの種類は、メソッドがどのように定義・実装されているかによって分類されます。最も一般的なのは **IL** で、C# などで書いた通常のメソッドはすべてこれに該当します。**PInvoke** は Windows API のようなネイティブ DLL の関数を呼び出す際に使われ、**FCall** は `string.Length` のようなランタイム自体がネイティブコードで実装している高速な内部メソッドに使われます。Java でいえば、**FCall** は JNI ネイティブメソッドに近い概念です。
+:::
 
-Virtual methods and inheritance would be the natural way to implement various kinds of MethodDesc in C++. The virtual methods would add vtable pointer to each MethodDesc, wasting a lot of precious space. The vtable pointer occupies 4 bytes on x86. Instead, the virtualization is implemented by switching based on the MethodDesc kind, which fits into 3 bits. For example:
+## 代替実装
+
+C++ では、仮想メソッドと継承を使って様々な種類の MethodDesc を実装するのが自然な方法です。しかし、仮想メソッドは各 MethodDesc に vtable ポインタを追加してしまい、貴重な領域を大量に浪費します。vtable ポインタは x86 では 4 バイトを占有します。代わりに、仮想化は MethodDesc の種類に基づくスイッチ分岐で実装されており、種類は 3 ビットに収まります。たとえば：
 
 ```c++
 DWORD MethodDesc::GetAttrs()
@@ -85,129 +88,136 @@ DWORD MethodDesc::GetAttrs()
 }
 ```
 
-Method Slots
-------------
+::: tip 💡 初心者向け補足
+通常の C++ 設計では、`MethodDesc` を基底クラスとし、`ArrayMethodDesc` や `DynamicMethodDesc` などを派生クラスとして仮想関数（`virtual`）で多態性を実現します。しかし、仮想関数を使うと各オブジェクトに vtable ポインタ（x86 で 4 バイト、x64 で 8 バイト）が追加されます。MethodDesc はすべてのメソッドに 1 つずつ存在するため、この数バイトの追加が全体で大きなメモリ消費になります。そこで、種類を 3 ビットのフラグとして持ち、`if` 文で分岐する方式を採用してメモリを節約しています。
+:::
 
-Each MethodDesc has a slot, which contains the current entry point of the method. The slot must exist for all methods, even the ones that never run like abstract methods. There are multiple places in the runtime that depend on mapping between entry points and MethodDescs.
+## メソッドスロット (Method Slots)
 
-Each MethodDesc logically has an entry point, but we do not allocate these eagerly at MethodDesc creation time. The invariant is that once the method is identified as a method to run, or is used in virtual overriding, we will allocate the entrypoint.
+各 MethodDesc はスロットを持ち、メソッドの現在のエントリポイントが格納されています。スロットは、抽象メソッドのように一度も実行されないメソッドも含め、すべてのメソッドに存在しなければなりません。ランタイム内の複数の箇所が、エントリポイントと MethodDesc の間のマッピングに依存しています。
 
-The slot is either in MethodTable or in MethodDesc itself. The location of the slot is determined by `mdcHasNonVtableSlot` bit on MethodDesc.
+各 MethodDesc は論理的にはエントリポイントを持ちますが、MethodDesc の作成時にこれらを積極的に割り当てることはしません。不変条件として、メソッドが実行すべきメソッドとして識別されるか、仮想オーバーライドで使用される場合にのみ、エントリポイントを割り当てます。
 
-The slot is stored in MethodTable for methods that require efficient lookup via slot index, e.g. virtual methods or methods on generic types. The MethodDesc contains the slot index to allow fast lookup of the entry point in this case.
+スロットは MethodTable 内または MethodDesc 自体のいずれかに格納されます。スロットの格納場所は、MethodDesc の `mdcHasNonVtableSlot` ビットによって決定されます。
 
-Otherwise, the slot is part of the MethodDesc itself. This arrangement improves data locality and saves working set. Also, it is not even always possible to preallocate a slot in a MethodTable upfront for dynamically created MethodDescs, such as for methods added by Edit & Continue, instantiations of generic methods or [dynamic methods](https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs).
+仮想メソッドやジェネリック型のメソッドなど、スロットインデックスによる効率的な検索が必要なメソッドの場合、スロットは MethodTable に格納されます。この場合、MethodDesc にはスロットインデックスが含まれており、エントリポイントの高速な検索が可能です。
 
-MethodDesc Chunks
------------------
+それ以外の場合、スロットは MethodDesc 自体の一部として格納されます。この方式はデータの局所性を向上させ、ワーキングセットを節約します。また、Edit & Continue で追加されたメソッド、ジェネリックメソッドのインスタンス化、[動的メソッド](https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs)など、動的に作成される MethodDesc に対しては、MethodTable にスロットを事前に割り当てることがそもそも不可能な場合もあります。
 
-The MethodDescs are allocated in chunks to save space. Multiple MethodDesc tend to have identical MethodTable and upper bits of metadata token. MethodDescChunk is formed by hoisting the common information in front of an array of multiple MethodDescs. The MethodDesc contains just the index of itself in the array.
+## MethodDesc チャンク (MethodDesc Chunks)
 
-![Figure 1](./images/methoddesc-fig1.png)
+MethodDesc は領域を節約するためにチャンク単位で割り当てられます。複数の MethodDesc は同一の MethodTable とメタデータトークンの上位ビットを共有する傾向があります。MethodDescChunk は、共通情報を先頭にまとめ、その後ろに複数の MethodDesc の配列を配置することで構成されます。各 MethodDesc は配列内での自身のインデックスのみを保持します。
 
-Figure 1 MethodDescChunk and MethodTable
+![図 1](./images/methoddesc-fig1.png)
 
-Debugging
----------
+図 1 MethodDescChunk と MethodTable
 
-The following SOS commands are useful for debugging MethodDesc:
+::: tip 💡 初心者向け補足
+チャンク（まとまり）による割り当ては、メモリ効率を高めるための最適化手法です。たとえば、あるクラスに 10 個のメソッドがある場合、10 個の MethodDesc がそれぞれ独立してクラス情報を持つのではなく、クラス情報を 1 箇所（MethodDescChunk の先頭）にまとめ、各 MethodDesc はそのチャンク内でのインデックス番号だけを持ちます。これは、同じマンション内の各部屋がそれぞれ住所を完全に保持する代わりに、部屋番号だけを持つようなものです。
+:::
 
-- **DumpMD** – dump the MethodDesc content:
+## デバッグ
 
-		!DumpMD 00912fd8
-		Method Name: My.Main()
-		Class: 009111ec
-		MethodTable: 00912fe8md
-		Token: 06000001
-		Module: 00912c14
-		IsJitted: yes
-		CodeAddr: 00ca0070
+以下の SOS コマンドが MethodDesc のデバッグに役立ちます：
 
-- **IP2MD** – find MethodDesc for given code address:
+- **DumpMD** – MethodDesc の内容をダンプします：
 
-		!ip2md 00ca007c
-		MethodDesc: 00912fd8
-		Method Name: My.Main()
-		Class: 009111ec
-		MethodTable: 00912fe8md
-		Token: 06000001
-		Module: 00912c14
-		IsJitted: yes
-		CodeAddr: 00ca0070
+      !DumpMD 00912fd8
+      Method Name: My.Main()
+      Class: 009111ec
+      MethodTable: 00912fe8md
+      Token: 06000001
+      Module: 00912c14
+      IsJitted: yes
+      CodeAddr: 00ca0070
 
-- **Name2EE** – find MethodDesc for given method name:
+- **IP2MD** – 指定されたコードアドレスから MethodDesc を検索します：
 
-		!name2ee hello.exe My.Main
-		Module: 00912c14 (hello.exe)
-		Token: 0x06000001
-		MethodDesc: 00912fd8
-		Name: My.Main()
-		JITTED Code Address: 00ca0070
+      !ip2md 00ca007c
+      MethodDesc: 00912fd8
+      Method Name: My.Main()
+      Class: 009111ec
+      MethodTable: 00912fe8md
+      Token: 06000001
+      Module: 00912c14
+      IsJitted: yes
+      CodeAddr: 00ca0070
 
-- **Token2EE** – find MethodDesc for given token (useful for finding MethodDesc for methods with weird names):
+- **Name2EE** – 指定されたメソッド名から MethodDesc を検索します：
 
-		!token2ee hello.exe 0x06000001
-		Module: 00912c14 (hello.exe)
-		Token: 0x06000001
-		MethodDesc: 00912fd
-		8Name: My.Main()
-		JITTED Code Address: 00ca0070
+      !name2ee hello.exe My.Main
+      Module: 00912c14 (hello.exe)
+      Token: 0x06000001
+      MethodDesc: 00912fd8
+      Name: My.Main()
+      JITTED Code Address: 00ca0070
 
-- **DumpMT** – MD – dump all MethodDescs in the given MethodTable:
+- **Token2EE** – 指定されたトークンから MethodDesc を検索します（特殊な名前のメソッドの MethodDesc を見つけるのに便利です）：
 
-		!DumpMT -MD 0x00912fe8
-		...
-		MethodDesc Table
-		   Entry MethodDesc      JIT Name
-		79354bec   7913bd48   PreJIT System.Object.ToString()
-		793539c0   7913bd50   PreJIT System.Object.Equals(System.Object)
-		793539b0   7913bd68   PreJIT System.Object.GetHashCode()
-		7934a4c0   7913bd70   PreJIT System.Object.Finalize()
-		00ca0070   00912fd8      JIT My.Main()
-		0091303c   00912fe0     NONE My..ctor()
+      !token2ee hello.exe 0x06000001
+      Module: 00912c14 (hello.exe)
+      Token: 0x06000001
+      MethodDesc: 00912fd8
+      Name: My.Main()
+      JITTED Code Address: 00ca0070
 
-A MethodDesc has fields with the name and signature of the method on debug builds. This is useful for debugging when the runtime state is severely corrupted and the SOS extension does not work.
+- **DumpMT -MD** – 指定された MethodTable 内のすべての MethodDesc をダンプします：
 
-Precode
-=======
+      !DumpMT -MD 0x00912fe8
+      ...
+      MethodDesc Table
+         Entry MethodDesc      JIT Name
+      79354bec   7913bd48   PreJIT System.Object.ToString()
+      793539c0   7913bd50   PreJIT System.Object.Equals(System.Object)
+      793539b0   7913bd68   PreJIT System.Object.GetHashCode()
+      7934a4c0   7913bd70   PreJIT System.Object.Finalize()
+      00ca0070   00912fd8      JIT My.Main()
+      0091303c   00912fe0     NONE My..ctor()
 
-The precode is a small fragment of code used to implement temporary entry points and an efficient wrapper for stubs. Precode is a niche code-generator for these two cases, generating the most efficient code possible. In an ideal world, all native code dynamically generated by the runtime would be produced by the JIT. That's not feasible in this case, given the specific requirements of these two scenarios. The basic precode on x86 may look like this:
+デバッグビルドでは、MethodDesc にメソッドの名前とシグネチャのフィールドが含まれます。これは、ランタイムの状態がひどく破損して SOS 拡張が機能しない場合のデバッグに役立ちます。
 
-	mov eax,pMethodDesc // Load MethodDesc into scratch register
-	jmp target          // Jump to a target
+## プリコード (Precode)
 
-**Efficient Stub wrappers:** The implementation of certain methods (e.g. P/Invoke, delegate invocation, multidimensional array setters and getters) is provided by the runtime, typically as hand-written assembly stubs. Precode provides a space-efficient wrapper over stubs, to multiplex them for multiple callers.
+プリコード (Precode) は、一時的なエントリポイントの実装と、スタブの効率的なラッパーとして使用される小さなコード断片です。プリコードは、これら 2 つのケースにおいて可能な限り効率的なコードを生成するニッチなコードジェネレータです。理想的な世界では、ランタイムが動的に生成するすべてのネイティブコードは JIT によって生成されるべきです。しかし、これら 2 つのシナリオの特殊な要件を考えると、それは実現可能ではありません。x86 における基本的なプリコードは以下のようになります：
 
-The worker code of the stub is wrapped by a precode fragment that can be mapped to the MethodDesc and that jumps to the worker code of the stub. The worker code of the stub can be shared between multiple methods this way. It is an important optimization used to implement P/Invoke marshalling stubs. It also creates a 1:1 mapping between MethodDescs and entry points, which establishes a simple and efficient low-level system.
+    mov eax,pMethodDesc // MethodDesc をスクラッチレジスタにロード
+    jmp target          // ターゲットにジャンプ
 
-**Temporary entry points:** Methods must provide entry points before they are jitted so that jitted code has an address to call them. These temporary entry points are provided by precode. They are a specific form of stub wrappers.
+**効率的なスタブラッパー:** 特定のメソッド（例：P/Invoke、デリゲート呼び出し、多次元配列のセッターやゲッター）の実装はランタイムによって提供され、通常は手書きのアセンブリスタブとして実装されます。プリコードは、スタブを複数の呼び出し元で多重化するための、領域効率の良いラッパーを提供します。
 
-This technique is a lazy approach to jitting, which provides a performance optimization in both space and time. Otherwise, the transitive closure of a method would need to be jitted before it was executed. This would be a waste, since only the dependencies of taken code branches (e.g. if statement) require jitting.
+スタブのワーカーコードは、MethodDesc にマッピング可能で、スタブのワーカーコードにジャンプするプリコード断片によってラップされます。これにより、スタブのワーカーコードを複数のメソッド間で共有できます。これは P/Invoke マーシャリングスタブの実装に使用される重要な最適化です。また、MethodDesc とエントリポイントの間に 1 対 1 のマッピングを作成し、シンプルで効率的な低レベルシステムを確立します。
 
-Each temporary entry point is much smaller than a typical method body. They need to be small since there are a lot of them, even at the cost of performance. The temporary entry points are executed just once before the actual code for the method is generated.
+**一時的なエントリポイント (Temporary Entry Points):** メソッドは JIT コンパイルされる前にエントリポイントを提供する必要があります。これにより、JIT コンパイル済みのコードがそれらを呼び出すためのアドレスを持てます。これらの一時的なエントリポイントはプリコードによって提供されます。これはスタブラッパーの一形態です。
 
-The target of the temporary entry point is a PreStub, which is a special kind of stub that triggers jitting of a method. It atomically replaces the temporary entry point with a stable entry point. The stable entry point has to remain constant for the method lifetime. This invariant is required to guarantee thread safety since the method slot is always accessed without any locks taken.
+この手法は JIT コンパイルへの遅延的なアプローチであり、空間と時間の両方においてパフォーマンスの最適化を提供します。そうでなければ、メソッドの推移的閉包（あるメソッドが呼び出すすべてのメソッド、さらにそれらが呼び出すメソッドの全体）を、実行前に JIT コンパイルする必要があるでしょう。これは無駄です。なぜなら、JIT コンパイルが必要なのは、実際に実行されるコード分岐（例：if 文）の依存先だけだからです。
 
-The **stable entry point** is either the native code or the precode. The **native code** is either jitted code or code saved in NGen image. It is common to talk about jitted code when we actually mean native code.
+各一時的エントリポイントは、典型的なメソッド本体よりもはるかに小さくなっています。数が多いため、パフォーマンスを犠牲にしてでも小さくする必要があります。一時的エントリポイントは、メソッドの実際のコードが生成される前に一度だけ実行されます。
 
-![Figure 2](./images/methoddesc-fig2.png)
+一時的エントリポイントのターゲットは PreStub であり、これはメソッドの JIT コンパイルをトリガーする特殊な種類のスタブです。PreStub は一時的エントリポイントを安定エントリポイント (stable entry point) にアトミックに置き換えます。安定エントリポイントはメソッドの存続期間を通じて一定でなければなりません。この不変条件は、メソッドスロットが常にロックなしでアクセスされるため、スレッドセーフティを保証するために必要です。
 
-Figure 2 Entry Point State Diagram
+**安定エントリポイント (stable entry point)** は、ネイティブコードまたはプリコードのいずれかです。**ネイティブコード (native code)** は、JIT コンパイルされたコードまたは NGen イメージに保存されたコードです。実際にはネイティブコードを意味しているのに、JIT コンパイルされたコードと言及することがよくあります。
 
-A method can have both native code and precode if there is a need to do work before the actual method body is executed. This situation typically happens for NGen image fixups. Native code is an optional MethodDesc slot in this case. This is necessary to lookup the native code of the method in a cheap uniform way.
+![図 2](./images/methoddesc-fig2.png)
 
-![Figure 3](./images/methoddesc-fig3.png)
+図 2 エントリポイントの状態遷移図
 
-Figure 3 The most complex case of Precode, Stub and Native Code
+メソッドは、実際のメソッド本体の実行前に作業を行う必要がある場合、ネイティブコードとプリコードの両方を持つことがあります。この状況は通常、NGen イメージのフィックスアップで発生します。この場合、ネイティブコードはオプションの MethodDesc スロットになります。これは、メソッドのネイティブコードを安価で統一的な方法で検索するために必要です。
 
-Single Callable vs. Multi Callable entry points
------------------------------------------------
+![図 3](./images/methoddesc-fig3.png)
 
-Entry point is needed to call the method. The MethodDesc exposes methods that encapsulate logic to get the most efficient entry point for the given situation. The key difference is whether the entry point will be used to call the method just once or whether it will be used to call the method multiple times.
+図 3 プリコード、スタブ、ネイティブコードの最も複雑なケース
 
-For example, it may be a bad idea to use the temporary entry point to call the method multiple times since it would go through the PreStub each time. On the other hand, using temporary entry point to call the method just once should be fine.
+::: tip 💡 初心者向け補足
+プリコードの仕組みを日常的な例えで説明すると、「電話の転送」に似ています。最初、メソッドを呼び出すと一時的エントリポイント（転送先）に接続され、そこから PreStub（受付係）に繋がります。PreStub は JIT コンパイラにメソッドのネイティブコードを生成させ、以降の呼び出しはそのネイティブコードに直接繋がるようになります。これにより、実際に呼び出されるメソッドだけが JIT コンパイルされる「遅延コンパイル」が実現され、起動時間とメモリ使用量の両方が最適化されます。
+:::
 
-The methods to get callable entry points from MethodDesc are:
+## シングルコーラブル vs マルチコーラブルエントリポイント
+
+メソッドを呼び出すためにはエントリポイントが必要です。MethodDesc は、与えられた状況に応じて最も効率的なエントリポイントを取得するロジックをカプセル化したメソッドを公開しています。重要な違いは、エントリポイントがメソッドの呼び出しに 1 回だけ使用されるか、複数回使用されるかです。
+
+たとえば、一時的エントリポイントを使ってメソッドを複数回呼び出すのは良くない考えです。毎回 PreStub を経由してしまうからです。一方、一時的エントリポイントを使ってメソッドを 1 回だけ呼び出す場合は問題ありません。
+
+MethodDesc から呼び出し可能なエントリポイントを取得するメソッドは以下の通りです：
 
 - `MethodDesc::GetSingleCallableAddrOfCode`
 - `MethodDesc::GetMultiCallableAddrOfCode`
@@ -215,72 +225,71 @@ The methods to get callable entry points from MethodDesc are:
 - `MethodDesc::GetSingleCallableAddrOfVirtualizedCode`
 - `MethodDesc::GetMultiCallableAddrOfVirtualizedCode`
 
-Types of precode
-----------------
+## プリコードの種類
 
-There are multiple specialized types of precodes.
+プリコードには複数の特殊な種類があります。
 
-The type of precode has to be cheaply computable from the instruction sequence. On x86 and x64, the type of precode is computed by fetching a byte at a constant offset. Of course, this imposes limits on the instruction sequences used to implement the various precode types.
+プリコードの種類は命令シーケンスから安価に計算できる必要があります。x86 および x64 では、プリコードの種類は一定のオフセット位置にあるバイトを読み取ることで判別されます。当然ながら、これは様々なプリコードの種類を実装するために使用される命令シーケンスに制約を課します。
 
 **StubPrecode**
 
-StubPrecode is the basic precode type. It loads MethodDesc into a scratch register<sup>2</sup> and then jumps. It must be implemented for precodes to work. It is used as fallback when no other specialized precode type is available.
+StubPrecode は基本的なプリコードの種類です。MethodDesc をスクラッチレジスタ<sup>2</sup>にロードし、ジャンプします。プリコードが機能するためには、これを実装する必要があります。他の特殊なプリコードの種類が利用できない場合のフォールバックとして使用されます。
 
-All other precodes types are optional optimizations that the platform specific files turn on via HAS\_XXX\_PRECODE defines.
+他のすべてのプリコードの種類は、プラットフォーム固有のファイルが HAS_XXX_PRECODE 定義によって有効にするオプションの最適化です。
 
-StubPrecode looks like this on x86:
+StubPrecode は x86 では以下のようになります：
 
-	mov eax,pMethodDesc
-	mov ebp,ebp // dummy instruction that marks the type of the precode
-	jmp target
+    mov eax,pMethodDesc
+    mov ebp,ebp // プリコードの種類を示すダミー命令
+    jmp target
 
-"target" points to prestub initially. It is patched to point to the final target. The final target (stub or native code) may or may not use MethodDesc in eax. Stubs often use it, native code does not use it.
+"target" は最初は PreStub を指しています。最終ターゲットを指すようにパッチされます。最終ターゲット（スタブまたはネイティブコード）は、eax 内の MethodDesc を使用する場合としない場合があります。スタブはよくそれを使用しますが、ネイティブコードは使用しません。
 
 **FixupPrecode**
 
-FixupPrecode is used when the final target does not require MethodDesc in scratch register<sup>2</sup>. The FixupPrecode saves a few cycles by avoiding loading MethodDesc into the scratch register.
+FixupPrecode は、最終ターゲットがスクラッチレジスタ<sup>2</sup>内の MethodDesc を必要としない場合に使用されます。FixupPrecode は MethodDesc のスクラッチレジスタへのロードを省略することで、数サイクルを節約します。
 
-Most stubs used are the more efficient form, we currently can use this form for everything but interop methods when a specialized form of Precode is not required.
+使用されるスタブのほとんどはより効率的な形式であり、現在、特殊な形式の Precode が不要な場合は相互運用メソッド以外のすべてにこの形式を使用できます。
 
-The initial state of the FixupPrecode on x86:
+FixupPrecode の初期状態（x86）：
 
-	call PrecodeFixupThunk // This call never returns. It pops the return address
-	                       // and uses it to fetch the pMethodDesc below to find
-	                       // what the method that needs to be jitted
-	pop esi // dummy instruction that marks the type of the precode
-	dword pMethodDesc
+    call PrecodeFixupThunk // この呼び出しは戻りません。リターンアドレスをポップし、
+                           // それを使って下の pMethodDesc を取得し、
+                           // JIT コンパイルが必要なメソッドを見つけます
+    pop esi // プリコードの種類を示すダミー命令
+    dword pMethodDesc
 
-Once it has been patched to point to final target:
+最終ターゲットにパッチされた後：
 
-	jmp target
-	pop edi
-	dword pMethodDesc
+    jmp target
+    pop edi
+    dword pMethodDesc
 
-<sup>2</sup> Passing MethodDesc in scratch register is sometimes referred to as **MethodDesc Calling Convention**.
+<sup>2</sup> MethodDesc をスクラッチレジスタに渡すことは、**MethodDesc 呼び出し規約 (MethodDesc Calling Convention)** と呼ばれることがあります。
 
 **ThisPtrRetBufPrecode**
 
-ThisPtrRetBufPrecode is used to switch a return buffer and the this pointer for open instance delegates returning valuetypes. It is used to convert the calling convention of MyValueType Bar(Foo x) to the calling convention of MyValueType Foo::Bar().
+ThisPtrRetBufPrecode は、値型を返すオープンインスタンスデリゲートにおいて、リターンバッファと this ポインタを入れ替えるために使用されます。MyValueType Bar(Foo x) の呼び出し規約を MyValueType Foo::Bar() の呼び出し規約に変換するために使用されます。
 
-This precode is always allocated on demand as a wrapper of the actual method entry point and stored in a table (FuncPtrStubs).
+このプリコードは常に実際のメソッドエントリポイントのラッパーとしてオンデマンドで割り当てられ、テーブル (FuncPtrStubs) に格納されます。
 
-ThisPtrRetBufPrecode looks like this:
+ThisPtrRetBufPrecode は以下のようになります：
 
-	mov eax,ecx
-	mov ecx,edx
-	mov edx,eax
-	nop
-	jmp entrypoint
-	dw pMethodDesc
+    mov eax,ecx
+    mov ecx,edx
+    mov edx,eax
+    nop
+    jmp entrypoint
+    dw pMethodDesc
 
 **PInvokeImportPrecode**
 
-PInvokeImportPrecode is used for lazy binding of unmanaged P/Invoke targets. This precode is for convenience and to reduce amount of platform specific plumbing.
+PInvokeImportPrecode は、アンマネージド P/Invoke ターゲットの遅延バインディング (lazy binding) に使用されます。このプリコードは利便性のため、およびプラットフォーム固有の配管コードを削減するために使用されます。
 
-Each PInvokeMethodDesc has PInvokeImportPrecode in addition to the regular precode.
+各 PInvokeMethodDesc は通常のプリコードに加えて PInvokeImportPrecode を持ちます。
 
-PInvokeImportPrecode looks like this on x86:
+PInvokeImportPrecode は x86 では以下のようになります：
 
-	mov eax,pMethodDesc
-	mov eax,eax // dummy instruction that marks the type of the precode
-	jmp PInvokeImportThunk // loads P/Invoke target for pMethodDesc lazily
+    mov eax,pMethodDesc
+    mov eax,eax // プリコードの種類を示すダミー命令
+    jmp PInvokeImportThunk // pMethodDesc の P/Invoke ターゲットを遅延ロード

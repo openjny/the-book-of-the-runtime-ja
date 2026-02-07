@@ -1,119 +1,136 @@
-# Managed Type System Overview
+# マネージド型システムの概要
 
 ::: info 原文
 この章の原文は [Managed Type System Overview](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/managed-type-system.md) です。
 :::
 
-Author: Michal Strehovsky ([@MichalStrehovsky](https://github.com/MichalStrehovsky)) - 2016
+著者: Michal Strehovsky ([@MichalStrehovsky](https://github.com/MichalStrehovsky)) - 2016
 
-## Introduction
+## はじめに
 
-The managed type system is a major component of new generation of .NET tools for AOT and IL verification. It represents the modules, types, methods, and fields within a program and provides higher level services to the type system users that lets them get answers to various interesting questions.
+マネージド型システム (Managed Type System) は、AOT および IL 検証のための新世代の .NET ツールの主要コンポーネントです。プログラム内のモジュール、型、メソッド、およびフィールドを表現し、型システムの利用者がさまざまな興味深い質問に対する回答を得られるよう、より高レベルなサービスを提供します。
 
-The managed type system is equivalent of [CoreCLR type system](./type-system) rewritten in C#. We've always wanted to implement runtime functionality in C#. The managed type system is the infrastructure that allows us to do that.
+マネージド型システムは、[CoreCLR の型システム](./type-system)を C# で書き直したものに相当します。私たちはランタイム機能を C# で実装したいとかねてから考えていました。マネージド型システムは、それを可能にするインフラストラクチャです。
 
-Some of the high level services the type system provides are:
+::: tip 💡 初心者向け補足
+型システム (Type System) とは、プログラム中の「型」に関する情報を管理する仕組みです。Java でいえば、クラスローダーやリフレクション API が提供する型情報に相当します。.NET のマネージド型システムは、型のメタデータ（フィールド構成、継承関係、インターフェース実装など）を読み取り、ランタイムやコンパイラが必要とする高レベルな情報を計算します。
+:::
 
-* Loading new types from the metadata
-* Computing set of interfaces implemented by a specific type
-* Computing static and instance field layout (assigning offsets to individual fields)
-* Computing static and instance GC layout of types (identifying GC pointers within object/class data)
-* Computing VTable layout (assigning slots to virtual methods) and resolving virtual methods to slots
-* Deciding whether a type can be stored to a location of another type
+型システムが提供する高レベルなサービスには、以下のようなものがあります:
 
-Three major themes drive the design of the type system:
+- メタデータからの新しい型の読み込み
+- 特定の型が実装するインターフェース (interface) の集合の計算
+- 静的フィールドおよびインスタンスフィールドのレイアウト (layout) の計算（個々のフィールドへのオフセット割り当て）
+- 型の静的およびインスタンス GC レイアウトの計算（オブジェクト/クラスデータ内の GC ポインタの識別）
+- VTable レイアウトの計算（仮想メソッドへのスロット割り当て）および仮想メソッドのスロットへの解決
+- ある型を別の型の場所に格納できるかどうかの判定
 
-1. Low overhead and high performance
-2. Concurrency
-3. Extensibility and reusability
+型システムの設計を駆動する3つの主要なテーマがあります:
 
-Low overhead is achieved by lazy loading - instead of eagerly populating the types with fields, various attributes, names, etc. these are read on demand from the underlying data source (metadata). Caching is used conservatively.
+1. 低オーバーヘッドと高パフォーマンス
+2. 並行性 (Concurrency)
+3. 拡張性と再利用性
 
-Where necessary, partial classes, extension methods, and pluggable algorithms are used to achieve goal 3 instead of polymorphism and object hierarchies. The reusability of the type system is at the source level (source-including different sets of files to get different features). This allows extensibility without making sacrifices that would take us away from goal 1.
+低オーバーヘッドは遅延読み込み (lazy loading) によって達成されます。型にフィールド、各種属性、名前などを先行的に (eagerly) 設定するのではなく、これらは基盤となるデータソース（メタデータ）からオンデマンドで読み取られます。キャッシュは控えめに使用されます。
 
-The type system in its purest form (i.e. without any partial class extensions) tries to avoid introducing concepts that are not defined in the [ECMA-335 specification](https://www.ecma-international.org/publications-and-standards/standards/ecma-335). The specification is a suggested prerequisite reading to this document and provides definitions to various terms used in this document.
+必要に応じて、ポリモーフィズムやオブジェクト階層の代わりに、パーシャルクラス (partial class)、拡張メソッド (extension method)、およびプラガブルアルゴリズム (pluggable algorithm) が目標 3 を達成するために使用されます。型システムの再利用性はソースレベルで行われます（異なるファイルセットをインクルードして異なる機能を得る）。これにより、目標 1 から離れることなく拡張性を実現できます。
 
-## Relationship with metadata
+型システムは、その最も純粋な形態（すなわち、パーシャルクラスの拡張なし）では、[ECMA-335 仕様](https://www.ecma-international.org/publications-and-standards/standards/ecma-335)で定義されていない概念の導入を避けようとします。この仕様は、本ドキュメントを読む前に読んでおくことが推奨される前提知識であり、本ドキュメントで使用されるさまざまな用語の定義を提供しています。
 
-While metadata (such as the file formats described in the ECMA-335 specification) has a close relationship with the type system, there is a clear distinction between these two: the metadata describes physical shape of the type (e.g. what is the base class of the type; or what fields does it have), but the type system builds higher level concepts on top of the shape (e.g. how many bytes are required to store an instance of the type at runtime; what interfaces does the type implement, including the inherited ones).
+## メタデータとの関係
 
-The type system provides access to most of the underlying metadata, but abstracts the way it was obtained. This allows types and members that are backed by metadata in other formats, or in no physical format at all (such as methods on array types), to be representable within the same type system context.
+メタデータ (metadata)（ECMA-335 仕様で記述されているファイルフォーマットなど）は型システムと密接な関係がありますが、この2つには明確な違いがあります。メタデータは型の物理的な形状を記述します（例: 型の基底クラスは何か、どのようなフィールドを持つか）が、型システムはその形状の上により高レベルな概念を構築します（例: 型のインスタンスをランタイムで格納するために何バイト必要か、継承されたものを含めて型がどのインターフェースを実装しているか）。
 
-## Type system class hierarchy
+::: tip 💡 初心者向け補足
+メタデータと型システムの関係は、設計図と建物の関係に似ています。メタデータ（設計図）は「このクラスにはどんなフィールドがあるか」「基底クラスは何か」といった静的な定義情報を提供します。一方、型システム（建物の施工計画）は、その情報をもとに「実際にメモリ上でどのように配置するか」「どのインターフェースを実装しているか」といった実行時に必要な高レベルの情報を計算します。
+:::
 
-The classes that represent types within the type system are:
+型システムは基盤となるメタデータの大部分へのアクセスを提供しますが、その取得方法は抽象化されています。これにより、他のフォーマットのメタデータに裏付けられた型やメンバー、あるいは物理的なフォーマットをまったく持たないもの（配列型のメソッドなど）を、同じ型システムコンテキスト内で表現できるようになっています。
 
-![hierarchy](./images/typesystem-hierarchy.svg)
+## 型システムのクラス階層
 
-Most of the classes in this hierarchy are not supposed to be derived by the type system user and many of them are sealed to prevent that.
+型システム内で型を表すクラスは以下のとおりです:
 
-The classes that are extensible (and are actually abstract classes) are shown with dark background above. The concrete class should provide implementation of the abstract and virtual methods based on some logic, such as reading metadata from an ECMA-335 module file (the type system already provides such implementation of `MetadataType` in its `EcmaType`, for example). Ideally, the type system consumers should operate on the abstract classes and use the concrete class only when creating a new instance. Casting to the concrete implementation type such as `EcmaType` is discouraged.
+![クラス階層](./images/typesystem-hierarchy.svg)
 
-## Type system classes
+この階層のほとんどのクラスは、型システムの利用者が派生させることを想定しておらず、多くはそれを防ぐために sealed になっています。
 
-Following section goes briefly over the classes representing types within the type system.
+拡張可能なクラス（実際には抽象クラス）は、上の図で暗い背景で表示されています。具象クラスは、ECMA-335 モジュールファイルからメタデータを読み取るなどのロジックに基づいて、抽象メソッドおよび仮想メソッドの実装を提供する必要があります（型システムは、例えば `EcmaType` において `MetadataType` のそのような実装をすでに提供しています）。理想的には、型システムの利用者は抽象クラスを操作し、具象クラスは新しいインスタンスを作成するときにのみ使用すべきです。`EcmaType` のような具象実装型へのキャストは推奨されません。
+
+## 型システムのクラス
+
+以下のセクションでは、型システム内で型を表すクラスについて簡単に説明します。
 
 ### TypeDesc
 
-`TypeDesc` is the base class of all types within the type system. It defines a list of operations all classes must support. Not all operations might make sense for all the children of `TypeDesc` (for example, it doesn't make sense to request a list of methods on a pointer type), but care is taken to provide an implementation that makes sense for each particular child (i.e. the list of methods on a pointer type is empty).
+`TypeDesc` は型システム内のすべての型の基底クラスです。すべてのクラスがサポートしなければならない操作のリストを定義します。すべての操作が `TypeDesc` のすべての子クラスに対して意味を持つわけではありません（例えば、ポインタ型に対してメソッドのリストを要求することは意味がありません）が、各子クラスに対して意味のある実装が提供されるよう配慮されています（すなわち、ポインタ型のメソッドリストは空になります）。
 
 ### ParameterizedType (ArrayType, ByRefType, PointerType)
 
-These are constructed types with a single parameter:
+これらは単一のパラメータを持つ構築型 (constructed type) です:
 
-* an array (either multi-dimensional, or a vector - a single dimensional array with an implicit zero lower bound),
-* a managed reference, or
-* an unmanaged pointer type.
+- 配列 (array)（多次元配列、またはベクター (vector) — 暗黙のゼロ下限を持つ1次元配列）
+- マネージド参照 (managed reference)
+- アンマネージドポインタ型 (unmanaged pointer type)
 
-Note the distinction between multidimensional arrays of rank 1 and vectors is a crucial one, and a source of potential bugs for the type system users. Type system users should take special care.
+ランク 1 の多次元配列とベクターの区別は非常に重要であり、型システムの利用者にとって潜在的なバグの原因となります。型システムの利用者は特に注意を払う必要があります。
+
+::: tip 💡 初心者向け補足
+「ランク 1 の多次元配列」と「ベクター」の区別は、.NET 特有の重要な概念です。C# で `int[]` と書くとベクター（1次元でインデックスが 0 から始まる配列）が作られますが、`Array.CreateInstance(typeof(int), new int[]{10})` で作った配列はランク 1 の多次元配列であり、型としては異なります。Java には対応する区別はありませんが、.NET の型システムではこの2つを厳密に区別する必要があります。
+:::
 
 ### DefType (NoMetadataType, MetadataType)
 
-`DefType` represents a value type, interface, or a class. While most instances of `DefType` will be of children of `MetadataType` (a type that is based off of some concrete metadata describing the type in full), there will be scenarios where full metadata is no longer available. In those cases, only restricted information (such as the number of bytes occupied by the instance of the type on the GC heap, or whether the type is a value type) is available. It is important that the type system is able to operate on such types. E.g. it should be possible for a type with restricted metadata to be a base type for a type with full metadata and the field layout algorithm should be able to compute the field layout of such a type.
+`DefType` は値型 (value type)、インターフェース (interface)、またはクラス (class) を表します。`DefType` のインスタンスのほとんどは `MetadataType`（型を完全に記述する何らかの具体的なメタデータに基づく型）の子クラスのものになりますが、完全なメタデータが利用できなくなるシナリオもあります。その場合、限定的な情報（GC ヒープ上の型のインスタンスが占めるバイト数や、その型が値型かどうかなど）のみが利用可能です。型システムがそのような型に対して操作できることは重要です。例えば、限定的なメタデータを持つ型が完全なメタデータを持つ型の基底型であることが可能であり、フィールドレイアウトアルゴリズムがそのような型のフィールドレイアウトを計算できる必要があります。
 
 ### GenericParameter
 
-Represents a generic parameter, along with its constraints. Generic definitions are represented as instantiations over generic parameters.
+ジェネリックパラメータ (generic parameter) を、その制約 (constraints) とともに表します。ジェネリック定義 (generic definition) は、ジェネリックパラメータに対するインスタンス化 (instantiation) として表現されます。
 
-Note for readers familiar with the .NET reflection type system: while the .NET reflection type system doesn't distinguish between a generic definition (e.g. `List<T>`) and an open instantiation of a generic type (e.g. `List<!0>`), the managed type system draws a distinction between those two. This distinction is important when representing member references from within IL method bodies - e.g. an IL reference using an LDTOKEN instruction to `List<T>.Add` should always refer to the uninstantiated definition, while a reference to `List<!0>.Add` will refer to a concrete method after substituting the signature variable.
+.NET リフレクション型システムに詳しい読者への注意: .NET リフレクション型システムはジェネリック定義（例: `List<T>`）とジェネリック型のオープンインスタンス化 (open instantiation)（例: `List<!0>`）を区別しませんが、マネージド型システムはこの2つを区別します。この区別は IL メソッド本体内からのメンバー参照を表現する際に重要です。例えば、LDTOKEN 命令を使用した `List<T>.Add` への IL 参照は常に未インスタンス化の定義を参照すべきですが、`List<!0>.Add` への参照はシグネチャ変数を置換した後の具象メソッドを参照します。
 
 ### SignatureVariable (SignatureTypeVariable, SignatureMethodVariable)
 
-Signature variables represent variables that can be substituted by other types within the system. They differ from generic parameters (because e.g. they don't have constraints or variance). They are simply placeholders to be replaced by other types as part of a process called instantiation. Signature variables have an index that refers to a position within the instantiation context.
+シグネチャ変数 (signature variable) は、システム内の他の型によって置換可能な変数を表します。ジェネリックパラメータとは異なります（例えば、制約や変性 (variance) を持たないため）。これらは単に、インスタンス化 (instantiation) と呼ばれるプロセスの一部として他の型に置き換えられるプレースホルダです。シグネチャ変数は、インスタンス化コンテキスト内の位置を参照するインデックスを持ちます。
 
-## Other type system classes
+## その他の型システムクラス
 
-Each use of a type system starts with creating a type system context. A type system context represents a type universe across which all types share reference identity (two `TypeDesc` objects represent identical types if and only if they are the same object instance). Type system context is used to resolve all modules and constructed types within the universe. It's not legal to create new instances of constructed types outside of the type system context.
+型システムの各使用は、型システムコンテキスト (type system context) の作成から始まります。型システムコンテキストは、すべての型が参照同一性 (reference identity) を共有する型ユニバースを表します（2つの `TypeDesc` オブジェクトが同一の型を表すのは、それらが同じオブジェクトインスタンスである場合に限ります）。型システムコンテキストは、ユニバース内のすべてのモジュールおよび構築型を解決するために使用されます。型システムコンテキストの外で構築型の新しいインスタンスを作成することは不正です。
 
-Other important classes within the type system are a `MethodDesc` (represents a method within the type system) and `FieldDesc` (represents a field within the type system). A `ModuleDesc` describes a single module which can optionally implement `IAssemblyDesc` interface if the module is an assembly. `ModuleDesc` is typically the owner of the type/method/field definitions within the module. It's the responsibility of the `ModuleDesc` to maintain the reference identity of those.
+::: tip 💡 初心者向け補足
+型システムコンテキストは、Java でいえば `ClassLoader` の役割に近いものです。あるコンテキスト内では、同じ型は必ず同じオブジェクトインスタンスで表されます（参照同一性）。これは Java の `ClassLoader` が同じクラスに対して同じ `Class` オブジェクトを返すのと似ています。この仕組みにより、型の比較を `==`（参照比較）で高速に行うことができます。
+:::
 
-## Pluggable algorithms
+型システム内の他の重要なクラスとして、`MethodDesc`（型システム内のメソッドを表す）と `FieldDesc`（型システム内のフィールドを表す）があります。`ModuleDesc` は単一のモジュールを記述し、そのモジュールがアセンブリである場合はオプションで `IAssemblyDesc` インターフェースを実装できます。`ModuleDesc` は通常、モジュール内の型/メソッド/フィールド定義のオーナーです。それらの参照同一性を維持するのは `ModuleDesc` の責任です。
 
-Most algorithms (e.g. the field layout algorithm) provided by the type system are pluggable. The type system context can influence the choice of the algorithm by providing different implementations of it.
+## プラガブルアルゴリズム
 
-The algorithms are used as an extensibility mechanism in places where partial classes and source inclusion wouldn't be sufficient. The choice of the particular algorithm might depend on multiple factors and the type system user might want to use multiple algorithms depending on a certain set of conditions determined at runtime (e.g. computing the list of runtime interfaces of regular `DefTypes` vs. the runtime interfaces of array types).
+型システムが提供するほとんどのアルゴリズム（例: フィールドレイアウトアルゴリズム）はプラガブル (pluggable) です。型システムコンテキストは、異なる実装を提供することでアルゴリズムの選択に影響を与えることができます。
 
-## Hash codes within the type system
+アルゴリズムは、パーシャルクラスやソースインクルードでは十分でない場所で拡張メカニズムとして使用されます。特定のアルゴリズムの選択は複数の要因に依存する可能性があり、型システムの利用者はランタイムで決定される特定の条件セットに応じて複数のアルゴリズムを使い分けたい場合があります（例: 通常の `DefType` のランタイムインターフェースのリストの計算 vs. 配列型のランタイムインターフェースの計算）。
 
-An interesting property of the type system lays in its ability to compute hash codes that can be reliably computed for any type or method represented within the system at compile time and at runtime. Having the same hash code available at both compile time and runtime is leveraged to build high performance lookup tables in AOT compiled code. The hash code is computed from type names and gets preserved as part of the runtime data structures so that it's available in situations when the type name has been optimized away by the compiler.
+## 型システム内のハッシュコード
 
-## Throwing exceptions from the type system
+型システムの興味深い特性として、システム内で表現される任意の型やメソッドに対して、コンパイル時とランタイムの両方で確実に計算できるハッシュコードを算出する能力があります。コンパイル時とランタイムの両方で同じハッシュコードが利用できることを活用して、AOT コンパイルされたコードで高パフォーマンスなルックアップテーブルを構築しています。ハッシュコードは型名から計算され、ランタイムデータ構造の一部として保存されるため、コンパイラによって型名が最適化により除去された状況でも利用可能です。
 
-Throwing an exception from within the type system is a bit more involved than a simple `throw` statement. This is because the type system is designed to be usable in many places and each could have a different requirement about how exceptions are thrown. For example, when the type system is included from the runtime, a `System.TypeLoadException` should be thrown when type loading fails. On the other hand, if a type loading error occurs in a compiler or IL verifier, a `System.TypeLoadException` would be indistinguishable from an actual problem with the managed assemblies that comprise the compiler. Therefore a different exception should be thrown.
+## 型システムからの例外のスロー
 
-Exception throwing within the type system is wrapped in a `ThrowHelper` class. The consumer of the type system provides a definition of this class and its methods. The methods control what exception type will be thrown.
+型システム内からの例外のスローは、単純な `throw` 文よりもやや複雑です。これは、型システムがさまざまな場所で使用可能なように設計されており、それぞれが例外のスロー方法について異なる要件を持つ可能性があるためです。例えば、型システムがランタイムからインクルードされている場合、型の読み込みに失敗すると `System.TypeLoadException` がスローされるべきです。一方、コンパイラや IL 検証器で型の読み込みエラーが発生した場合、`System.TypeLoadException` はコンパイラを構成するマネージドアセンブリの実際の問題と区別がつかなくなります。したがって、異なる例外がスローされるべきです。
 
-The type system provides a default implementation of the `ThrowHelper` class that throws exceptions deriving from a `TypeSystemException` exception base class. This default implementation is suitable for use in non-runtime scenarios.
+型システム内の例外スローは `ThrowHelper` クラスにラップされています。型システムの利用者がこのクラスとそのメソッドの定義を提供します。メソッドは、どの例外型がスローされるかを制御します。
 
-The exception messages are assigned string IDs and get consumed by the throw helper as well. We require this indirection to support the compiler scenarios: when a type loading exception occurs during an AOT compilation, the AOT compiler has two tasks - emit a warning to warn the user that this occurred, and potentially generate a method body that will throw this exception at runtime when the problematic type is accessed. The localization of the compiler might not match the localization of the class library the compiler output is linking against. Indirecting the actual exception message through the string ID lets us wrap this. The consumer of the type system may reuse the throw helper in places outside the type system where this functionality is needed.
+型システムは、`TypeSystemException` 例外基底クラスから派生した例外をスローする `ThrowHelper` クラスのデフォルト実装を提供しています。このデフォルト実装は、非ランタイムシナリオでの使用に適しています。
 
-## Physical architecture
+例外メッセージには文字列 ID が割り当てられ、スローヘルパーによっても消費されます。この間接化は、コンパイラシナリオをサポートするために必要です。AOT コンパイル中に型の読み込み例外が発生した場合、AOT コンパイラには2つのタスクがあります — これが発生したことをユーザーに警告するための警告を出すことと、問題のある型がアクセスされたときにランタイムでこの例外をスローするメソッド本体を生成する可能性があることです。コンパイラのローカリゼーション (localization) は、コンパイラ出力がリンクするクラスライブラリのローカリゼーションと一致しない場合があります。実際の例外メッセージを文字列 ID を通じて間接化することで、これをラップできます。型システムの利用者は、この機能が必要な型システム外の場所でもスローヘルパーを再利用できます。
 
-The type system implementation is found in:
-* `src/coreclr/tools/Common/TypeSystem/Common`: most of the common type system is here
-* `src/coreclr/tools/Common/TypeSystem/Ecma`: concrete implementations of `MetadataType`, `MethodDesc`, `FieldDesc` etc. that read metadata from ECMA-335 module files is here
-* `src/coreclr/tools/aot/ILCompiler.TypeSystem.ReadyToRun.Tests`: unit tests that shed some light into the operation and features of the type system. This is a good starting point to learn about the code.
+## 物理アーキテクチャ
 
-## Notable differences from CoreCLR type system
+型システムの実装は以下の場所にあります:
 
-* `MethodDesc` has exact generic instantiations where possible in managed type system. The code sharing policy in managed type system is one of the pluggable algorithms and it does not affect `MethodDesc` identity. The code sharing policy in the CoreCLR type system is coupled with `MethodDesc` identity. See https://github.com/dotnet/runtime/pull/45744 for an example how this difference manifests itself.
+- `src/coreclr/tools/Common/TypeSystem/Common`: 共通型システムの大部分がここにあります
+- `src/coreclr/tools/Common/TypeSystem/Ecma`: ECMA-335 モジュールファイルからメタデータを読み取る `MetadataType`、`MethodDesc`、`FieldDesc` などの具象実装がここにあります
+- `src/coreclr/tools/aot/ILCompiler.TypeSystem.ReadyToRun.Tests`: 型システムの動作と機能について理解を深めることができるユニットテストがここにあります。コードについて学ぶための良い出発点です。
+
+## CoreCLR 型システムとの注目すべき違い
+
+- マネージド型システムでは、`MethodDesc` は可能な場合に正確なジェネリックインスタンス化 (exact generic instantiation) を持ちます。マネージド型システムにおけるコード共有ポリシー (code sharing policy) はプラガブルアルゴリズムの1つであり、`MethodDesc` の同一性 (identity) に影響を与えません。CoreCLR 型システムでは、コード共有ポリシーが `MethodDesc` の同一性と結合しています。この違いがどのように現れるかの例については、[こちらの PR](https://github.com/dotnet/runtime/pull/45744) を参照してください。
