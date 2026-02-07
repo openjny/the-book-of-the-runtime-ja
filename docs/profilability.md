@@ -1,61 +1,64 @@
-# Implementing Profilability
+# プロファイラビリティの実装
 
 ::: info 原文
 この章の原文は [Implementing Profilability](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/profilability.md) です。
 :::
 
-This document describes technical details of adding profilability to a CLR feature.  This is targeted toward devs who are modifying the profiling API so their feature can be profilable.
+本ドキュメントでは、CLR の機能にプロファイラビリティ (profilability) を追加するための技術的な詳細を説明します。これは、自身の機能をプロファイル可能にするためにプロファイリング API を変更する開発者を対象としています。
 
-Philosophy
-==========
+::: tip 💡 初心者向け補足
+「プロファイラビリティ (profilability)」とは、プログラムの実行状況（パフォーマンス、メモリ使用量、関数の呼び出し回数など）を外部ツール（プロファイラー）から観測・分析できるようにする仕組みのことです。CLR に新しい機能を追加する際には、その機能もプロファイラーから正しく監視できるようにする必要があります。Java における JVMTI (JVM Tool Interface) に相当する概念です。
+:::
 
-Contracts
----------
+## 設計哲学
 
-Before delving into the details on which contracts should be used in the profiling API, it's useful to understand the overall philosophy.
+## コントラクト
 
-A philosophy behind the default contracts movement throughout the CLR (outside of the profiling API) is to encourage the majority of the CLR to be prepared to deal with "aggressive behavior" like throwing or triggering.  Below you'll see that this goes hand-in-hand with the recommendations for the callback (ICorProfilerCallback) contracts, which generally prefer the more permissive ("aggressive") of the contract choices.  This gives the profiler the most flexibility in what it can do during its callback (in terms of which CLR calls it can make via ICorProfilerInfo).
+プロファイリング API でどのコントラクト (contract) を使用すべきかの詳細に入る前に、全体的な哲学を理解しておくことが有用です。
 
-However, the Info functions (ICorProfilerInfo) below are just the opposite: they're preferred to be restrictive rather than permissive.  Why?  Because we want these to be safe for the profiler to call from as many places as possible, even from those callbacks that are more restrictive than we might like (e.g., callbacks that for some reason must be GC\_NOTRIGGER).
+CLR 全体（プロファイリング API の外側）におけるデフォルトコントラクト運動の背景にある哲学は、CLR の大部分がスロー (throw) やトリガー (trigger) といった「攻撃的な動作 (aggressive behavior)」に対処できるようにすることです。後述しますが、これはコールバック (ICorProfilerCallback) のコントラクトに関する推奨事項と表裏一体であり、コールバックのコントラクトは一般的に、より許容的（「攻撃的」）なコントラクトの選択を好みます。これにより、プロファイラーはコールバック中に最大限の柔軟性を持つことができます（ICorProfilerInfo を通じてどの CLR 呼び出しが可能かという点で）。
 
-Also, the preference for more restrictive contracts in ICorProfilerInfo doesn't contradict the overall CLR default contract philosophy, because it is expected that there will be a small minority of CLR functions that need to be restrictive.  ICorProfilerInfo is the root of call paths that fall into this category.  Since the profiler may be calling into the CLR at delicate times, we want these calls to be as unobtrusive as possible.  These are not considered mainstream functions in the CLR, but are a small minority of special call paths that need to be careful.
+しかし、Info 関数 (ICorProfilerInfo) は正反対です。許容的ではなく、**制限的**であることが好まれます。なぜでしょうか？プロファイラーがこれらの関数を可能な限り多くの場所から安全に呼び出せるようにしたいからです。たとえ、本来望ましいよりも制限的なコールバック（何らかの理由で GC_NOTRIGGER でなければならないコールバックなど）からであってもです。
 
-So the general guidance is to use default contracts throughout the CLR where possible.  But when you need to blaze a path of calls originating from a profiler (i.e., from ICorProfilerInfo), that path will need to have its contracts explicitly specified, and be more restrictive than the default.
+また、ICorProfilerInfo でより制限的なコントラクトを好むことは、CLR 全体のデフォルトコントラクト哲学と矛盾しません。なぜなら、制限的である必要がある CLR 関数は少数派であると想定されているからです。ICorProfilerInfo は、このカテゴリに該当する呼び出しパスのルートです。プロファイラーはデリケートなタイミングで CLR に呼び出しを行う可能性があるため、これらの呼び出しは可能な限り控えめであることが求められます。これらは CLR のメインストリームの関数ではなく、慎重さが求められる特殊な呼び出しパスのごく少数のものです。
 
-Performance or ease of use?
----------------------------
+したがって、一般的なガイダンスとしては、可能な限り CLR 全体でデフォルトコントラクトを使用することです。しかし、プロファイラーから発生する呼び出しのパスを切り開く必要がある場合（すなわち ICorProfilerInfo から）、そのパスはコントラクトを明示的に指定し、デフォルトよりも制限的にする必要があります。
 
-Both would be nice.  But if you need to make a trade-off, favor performance.  The profiling API is meant to be a light-weight, thin, in-process layer between the CLR and a profiling DLL.  Profiler writers are few and far between, and are mostly quite sophisticated developers.  Simple validation of inputs by the CLR is expected.  But we only go so far.  For example, consider all the profiler IDs.  They're just casted pointers of C++ EE object instances that are called into directly (AppDomain\*, MethodTable\*, etc.).  A Profiler provides a bogus ID?  The CLR AVs!  This is expected.  The CLR does not hash IDs, in order to validate a lookup . Profilers are assumed to know what they are doing.
+::: tip 💡 初心者向け補足
+「コントラクト (contract)」とは、CLR の内部コードで使用される一種の「約束事」や「宣言」です。関数がどのような動作をするか（例外をスローするかどうか、GC をトリガーするかどうか、ロックを取得するかどうかなど）を明示的に記述します。Java のアノテーションや、C++ の `noexcept` 指定子に似た概念ですが、CLR ではより広範囲の動作を宣言します。これにより、開発者やツールが関数の安全性を事前にチェックでき、デバッグ時の問題特定が容易になります。
+:::
 
-That said, I'll repeat: simple validation of inputs by the CLR is expected.  Things like checking for NULL pointers, that classes requested for inspection have been initialized, "parallel parameters" are consistent (e.g., an array pointer parameter must be non-null if its size parameter is nonzero), etc.
+## パフォーマンスか使いやすさか？
 
-ICorProfilerCallback
-====================
+どちらも実現できれば理想的です。しかし、トレードオフが必要な場合は**パフォーマンスを優先**してください。プロファイリング API は、CLR とプロファイリング DLL の間の軽量で薄いインプロセス (in-process) レイヤーとなることを意図しています。プロファイラーの開発者はごく少数であり、そのほとんどが高度な技術を持つ開発者です。CLR による入力の簡単なバリデーション (validation) は期待されています。しかし、それにも限度があります。たとえば、すべてのプロファイラー ID を考えてみてください。それらは、直接呼び出される C++ EE オブジェクトインスタンスのキャストされたポインタに過ぎません（AppDomain\*、MethodTable\* など）。プロファイラーが不正な ID を渡すとどうなるでしょうか？CLR がアクセス違反 (AV) を起こします！これは想定された動作です。CLR はルックアップを検証するために ID をハッシュしたりしません。プロファイラーは自分が何をしているか理解していることが前提とされています。
 
-This interface comprises the callbacks made by the CLR into the profiler to notify the profiler of interesting events.  Each callback is wrapped in a thin method in the EE that handles locating the profiler's implementation of ICorProfilerCallback(2), and calling its corresponding method.
+とはいえ、繰り返しますが、CLR による入力の簡単なバリデーションは期待されています。NULL ポインタのチェック、検査対象のクラスが初期化済みであることの確認、「並行パラメータ (parallel parameters)」の一貫性の検証（例：配列ポインタパラメータは、そのサイズパラメータが非ゼロの場合、非 null でなければならない）などです。
 
-Profilers subscribe to events by specifying the corresponding flag in a call to ICorProfilerInfo::SetEventMask()/ICorProfilerInfo::SetEventMask2().  The profiling API stores these choices and exposes them to the CLR through specialized inline functions (CORProfiler\*) that mask against the bit corresponding to the flag.   Then, sprinkled throughout the CLR, you'll see code that calls the ICorProfilerCallback wrapper to notify the profiler of events as they happen, but this call is conditional on the flag being set (determined by calling the specialized inline function):
+## ICorProfilerCallback
+
+このインターフェースは、CLR からプロファイラーへ興味深いイベントを通知するためのコールバック (callback) で構成されます。各コールバックは、EE 内の薄いメソッドでラップされており、そのメソッドがプロファイラーの ICorProfilerCallback(2) の実装を見つけ、対応するメソッドを呼び出す処理を行います。
+
+プロファイラーは、ICorProfilerInfo::SetEventMask() / ICorProfilerInfo::SetEventMask2() の呼び出しで対応するフラグ (flag) を指定することによりイベントをサブスクライブ (subscribe) します。プロファイリング API はこれらの選択を保存し、フラグに対応するビットに対してマスクする特殊なインライン関数 (CORProfiler\*) を通じて CLR に公開します。すると、CLR のあちこちに、イベントの発生時にプロファイラーに通知するため ICorProfilerCallback ラッパーを呼び出すコードがありますが、この呼び出しはフラグが設定されているかどうか（特殊なインライン関数の呼び出しによって判定）を条件としています：
 
     {
-        // check if profiler set flag
+        // プロファイラーがフラグを設定したかチェック
         BEGIN_PROFILER_CALLBACK(CORProfilerTrackModuleLoads());
 
-        // call the ProfControlBlock wrapper around the profiler's callback implementation
-        // which pins the profiler in DoOneProfilerIteration via EvacuationCounterHolder
+        // ProfControlBlock ラッパーを通じてプロファイラーのコールバック実装を呼び出す
+        // DoOneProfilerIteration 内で EvacuationCounterHolder を通じてプロファイラーを固定 (pin) する
         (&g_profControlBlock)->ModuleLoadStarted((ModuleID) this);
-        // unpins the profiler after completing the callback
+        // コールバック完了後にプロファイラーの固定を解除
 
         END_PROFILER_CALLBACK();
     }
 
-To be clear, the code above is what you'll see sprinkled throughout the code base.  The function it calls (in this case ModuleLoadStarted()) is our wrapper around the profiler's callback implementation (in this case ICorProfilerCallback::ModuleLoadStarted()).  All of our wrappers appear in a single file (vm\EEToProfInterfaceImpl.cpp), and the guidance provided in the sections below relate to those wrappers; not to the above sample code that calls the wrappers.
+明確にしておくと、上記のコードはコードベース全体に散りばめられているものです。呼び出される関数（この場合は ModuleLoadStarted()）は、プロファイラーのコールバック実装（この場合は ICorProfilerCallback::ModuleLoadStarted()）に対する私たちのラッパーです。すべてのラッパーは単一のファイル（vm\EEToProfInterfaceImpl.cpp）にあり、以下のセクションで提供されるガイダンスはそれらのラッパーに関するものであり、ラッパーを呼び出す上記のサンプルコードに関するものではありません。
 
-The macro BEGIN_PROFILER_CALLBACK evaluates the expression passed as its argument.  If the expression is TRUE, the code between the BEGIN_PROFILER_CALLBACK and END_PROFILER_CALLBACK macros is executed, and the profiler is pinned into memory (meaning the profiler will not be able to detach from the process) through the ProfControlBlock wrapper.  If the expression is FALSE, all code between the BEGIN_PROFILER_CALLBACK and END_PROFILER_CALLBACK macros is skipped.  For more information about the BEGIN_PROFILER_CALLBACK and END_PROFILER_CALLBACK macros, find their definition in the code base and read the comments there.
+BEGIN_PROFILER_CALLBACK マクロは、引数として渡された式を評価します。式が TRUE の場合、BEGIN_PROFILER_CALLBACK と END_PROFILER_CALLBACK マクロの間のコードが実行され、プロファイラーは ProfControlBlock ラッパーを通じてメモリに固定 (pin) されます（つまり、プロファイラーはプロセスからデタッチできなくなります）。式が FALSE の場合、BEGIN_PROFILER_CALLBACK と END_PROFILER_CALLBACK マクロの間のすべてのコードはスキップされます。BEGIN_PROFILER_CALLBACK と END_PROFILER_CALLBACK マクロの詳細については、コードベース内でその定義を見つけ、そこにあるコメントを読んでください。
 
-Contracts
----------
+## コントラクト
 
-Each and every callback wrapper must have some common gunk at the top.  Here's an example:
+各コールバックラッパーには、先頭にいくつかの共通の定型コードが必要です。以下は例です：
 
     CONTRACTL
     {
@@ -76,80 +79,84 @@ Each and every callback wrapper must have some common gunk at the top.  Here's a
                             LL_INFO10,
                             "**PROF: useful logging text here.\n"));
 
-Important points:
+重要なポイント：
 
-- You must explicitly specify a value for the throws, triggers, mode, take\_lock, and ASSERT\_NO\_EE\_LOCKS\_HELD() (latter required on callbacks only). This allows us to keep our documentation for profiler-writers accurate.
-- Each contract must have its own comment (see below for specific details on contracts)
+- throws、triggers、mode、take_lock、および ASSERT_NO_EE_LOCKS_HELD()（後者はコールバックでのみ必須）の値を明示的に指定する必要があります。これにより、プロファイラー開発者向けのドキュメントを正確に保つことができます。
+- 各コントラクトにはそれぞれのコメントが必要です（コントラクトの具体的な詳細は以下を参照）
 
-There's a "preferred" value for each contract type.  If possible, use that and comment it with "Yay!" so that others who copy / paste your code elsewhere will know what's best.  If it's not possible to use the preferred value, comment why.
+各コントラクトの種類には「推奨値 (preferred value)」があります。可能であればその値を使用し、「Yay!」とコメントしてください。これにより、コピー＆ペーストする他の開発者にとって何がベストかが分かります。推奨値を使用できない場合は、その理由をコメントしてください。
 
-Here are the preferred values for callbacks.
+以下はコールバックの推奨値です。
 
-| Preferred | Why | Details |
-| --------- | --- | ------- |
-| NOTHROW   | Allows callback to be issued from any CLR context.  Since Infos should be NOTHROW as well, this shouldn't be a hardship for the profiler.   | Note that you will get throws violations if the profiler calls a THROWS Info function from here, even though the profiler encloses the call in a try/catch (because our contract system can't see the profiler's try/catch).  So you'll need to insert a CONTRACT\_VIOLATION(ThrowsViolation) scoped just before the call into the profiler. |
-| GC\_TRIGGERS | Gives profiler the most flexibility in the Infos it can call. | If the callback is made at a delicate time where protecting all the object refs would be error-prone or significantly degrade performance, use GC\_NOTRIGGER (and comment of course!). |
-| MODE\_PREEMPTIVE if possible, otherwise MODE\_COOPERATIVE | MODE\_PREEMPTIVE gives profiler the most flexibility in the Infos it can call (except when coop is necessary due to ObjectIDs).  Also, MODE\_PREEMPTIVE is a preferred "default" contract throughout the EE, and forcing callbacks to be in preemptive encourages use of preemptive elsewhere in the EE. | MODE\_COOPERATIVE is fair if you're passing ObjectID parameters to the profiler.  Otherwise, specify MODE\_PREEMPTIVE.  The caller of the callback should hopefully already be in preemptive mode anyway.  If not, rethink why not and potentially change the caller to be in preemptive.  Otherwise, you will need to use a GCX\_PREEMP() macro before calling the callback. |
-| CAN\_TAKE\_LOCK | Gives profiler the most flexibility in the Infos it can call | Nothing further, your honor. |
-| ASSERT\_NO\_EE\_LOCKS\_HELD() | Gives profiler even more flexibility on Infos it can call, as it ensures no Info could try to retake a lock or take an out-of-order lock (since no lock is taken to "retake" or destroy ordering) | This isn't actually a contract, though the contract block is a convenient place to put this, so you don't forget.  As with the contracts, if this cannot be specified, comment why. |
+| 推奨値                                                     | 理由                                                                                                                                                                                                                                                                                                             | 詳細                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NOTHROW                                                    | コールバックをあらゆる CLR コンテキストから発行可能にする。Info 関数も NOTHROW であるべきなので、プロファイラーにとって負担にならない。                                                                                                                                                                          | プロファイラーが THROWS の Info 関数をここから呼び出すと、プロファイラーが try/catch で囲んでいても throws 違反が発生する（コントラクトシステムはプロファイラーの try/catch を認識できないため）。そのため、プロファイラーへの呼び出しの直前にスコープされた CONTRACT_VIOLATION(ThrowsViolation) を挿入する必要がある。                                                      |
+| GC_TRIGGERS                                                | プロファイラーが呼び出せる Info 関数の柔軟性を最大化する。                                                                                                                                                                                                                                                       | コールバックがデリケートなタイミングで行われ、すべてのオブジェクト参照を保護することがエラーを起こしやすいか、パフォーマンスを大幅に低下させる場合は、GC_NOTRIGGER を使用する（もちろんコメント付きで！）。                                                                                                                                                                  |
+| MODE_PREEMPTIVE（可能な場合）、それ以外は MODE_COOPERATIVE | MODE_PREEMPTIVE はプロファイラーが呼び出せる Info 関数の柔軟性を最大化する（ObjectID のために協調モードが必要な場合を除く）。また、MODE_PREEMPTIVE は EE 全体で推奨される「デフォルト」コントラクトであり、コールバックをプリエンプティブモードにすることで、EE の他の場所でもプリエンプティブの使用を促進する。 | ObjectID パラメータをプロファイラーに渡す場合は MODE_COOPERATIVE が妥当。それ以外は MODE_PREEMPTIVE を指定する。コールバックの呼び出し元はすでにプリエンプティブモードにあるはず。そうでない場合は、なぜそうでないかを再検討し、呼び出し元をプリエンプティブに変更することを検討する。それが無理な場合は、コールバック呼び出し前に GCX_PREEMP() マクロを使用する必要がある。 |
+| CAN_TAKE_LOCK                                              | プロファイラーが呼び出せる Info 関数の柔軟性を最大化する。                                                                                                                                                                                                                                                       | 特に追加事項なし。                                                                                                                                                                                                                                                                                                                                                           |
+| ASSERT_NO_EE_LOCKS_HELD()                                  | プロファイラーが呼び出せる Info 関数にさらなる柔軟性を与える。Info がロックの再取得や順序外のロック取得を試みないことを保証する（再取得すべきロックや順序を壊すロックが取得されていないため）。                                                                                                                  | これは実際にはコントラクトではないが、コントラクトブロックは忘れないための便利な場所である。コントラクトと同様に、これを指定できない場合はその理由をコメントする。                                                                                                                                                                                                           |
 
-Note: EE\_THREAD\_NOT\_REQUIRED / EE\_THREAD\_REQUIRED need **not** be specified for callbacks.  GC callbacks cannot specify "REQUIRED" anyway (no EE Thread might be present), and it is only interesting to consider these on the Info functions (profiler &#8594; CLR).
+注意：EE_THREAD_NOT_REQUIRED / EE_THREAD_REQUIRED はコールバックでは指定する**必要はありません**。GC コールバックはそもそも「REQUIRED」を指定できません（EE スレッドが存在しない可能性がある）し、これらは Info 関数（プロファイラー → CLR）でのみ考慮が必要です。
 
-Entrypoint macros
------------------
+## エントリポイントマクロ
 
-As in the example above, after the contracts there should be an entrypoint macro.  This takes care of logging, marking on the EE Thread object that we're in a callback, removing stack guard, and doing some asserts.  There are a few variants of the macro you can use:
+上記の例のように、コントラクトの後にはエントリポイントマクロ (entrypoint macro) を配置する必要があります。このマクロは、ログの記録、EE スレッドオブジェクトへのコールバック中であるというマーキング、スタックガードの除去、およびいくつかのアサートの処理を行います。使用できるマクロにはいくつかのバリアントがあります：
 
     CLR_TO_PROFILER_ENTRYPOINT
 
-This is the preferred and typically-used macro.
+これが推奨されるマクロであり、通常使用されるマクロです。
 
-Other macro choices may be used **but you must comment** why the above (preferred) macro cannot be used.
+他のマクロを使用することもできますが、上記の（推奨される）マクロを使用できない理由を**コメントしなければなりません**。
 
     *_FOR_THREAD_*
 
-These macros are used for ICorProfilerCallback methods that specify a ThreadID parameter whose value may not always be the _current_ ThreadID.  You must specify the ThreadID as the first parameter to these macros.  The macro will then use your ThreadID rather than GetThread(), to assert that the callback is currently allowed for that ThreadID (i.e., that we have not yet issued a ThreadDestroyed() for that ThreadID).
+これらのマクロは、ThreadID パラメータの値が必ずしも*現在の* ThreadID と一致しない ICorProfilerCallback メソッドに使用されます。ThreadID をこれらのマクロの最初のパラメータとして指定する必要があります。マクロは GetThread() の代わりに指定された ThreadID を使用して、そのコールバックがその ThreadID に対して現在許可されているかどうか（すなわち、その ThreadID に対してまだ ThreadDestroyed() が発行されていないこと）をアサートします。
 
-ICorProfilerInfo
-================
+## ICorProfilerInfo
 
-This interface comprises the entrypoints used by the profiler to call into the CLR.
+このインターフェースは、プロファイラーが CLR に呼び出すために使用するエントリポイント (entrypoint) で構成されます。
 
-Synchronous / Asynchronous
---------------------------
+## 同期 / 非同期
 
-Each Info call is classified as either synchronous or asynchronous.  Synchronous functions must be called from within a callback, whereas asynchronous functions are safe to be called at any time.
+各 Info 呼び出しは、同期 (synchronous) または非同期 (asynchronous) のいずれかに分類されます。同期関数はコールバック内からのみ呼び出す必要がありますが、非同期関数はいつでも安全に呼び出すことができます。
 
-### Synchronous
+::: tip 💡 初心者向け補足
+ここでの「同期 (synchronous)」と「非同期 (asynchronous)」は、一般的なプログラミングにおける async/await とは異なる意味で使われています。プロファイリング API における「同期」とは、「CLR がプロファイラーにコールバック通知を送っている最中にのみ呼び出せる関数」を意味します。つまり、CLR → プロファイラーのコールバックのスタック上にいるときだけ安全に呼び出せるということです。「非同期」は、プロファイラーがいつでも（コールバック中でなくても）安全に呼び出せる関数を指します。
+:::
 
-The vast majority of Info calls are synchronous: They can only be called by a profiler while it is executing inside a Callback.  In other words, an ICorProfilerCallback must be on the stack for it to be legal to call a synchronous Info function.  This is tracked by a bit on the EE Thread object.  When a Callback is made, we set the bit.  When the callback returns, we reset the bit.  When a synchronous Info function is called, we test the bit—if it's not set, disallow the call.
+### 同期
 
-#### Threads without an EE Thread
+Info 呼び出しの大多数は同期です。プロファイラーがコールバック内で実行している間にのみ呼び出すことができます。言い換えると、同期 Info 関数を呼び出すことが合法であるためには、スタック上に ICorProfilerCallback が存在している必要があります。これは EE スレッドオブジェクトのビットで追跡されます。コールバックが行われるとビットを設定し、コールバックが返されるとビットをリセットします。同期 Info 関数が呼び出されると、このビットをテストし、設定されていなければ呼び出しを拒否します。
 
-Because the above bit is tracked using the EE Thread object, only Info calls made on threads containing an EE Thread object have their "synchronous-ness" enforced.  Any Info call made on a non-EE Thread thread is immediately considered legal.  This is generally fine, as it's mainly the EE Thread threads that build up complex contexts that would be problematic to reenter.  Also, it's ultimately the profiler's responsibility to ensure correctness.  As described above, for performance reasons, the profiling API historically keeps its correctness checks down to a bare minimum, so as not to increase the weight.  Typically, Info calls made by a profiler on a non-EE Thread fall into these categories:
+#### EE スレッドのないスレッド
 
-- An Info call made during a GC callback on a thread doing a server.
-- An Info call made on a thread of the profiler's creation, such as a sampling thread (which therefore would have no CLR code on the stack).
+上記のビットは EE スレッドオブジェクトを使用して追跡されるため、EE スレッドオブジェクトを持つスレッド上で行われた Info 呼び出しのみが「同期性」を強制されます。EE スレッドではないスレッド上で行われた Info 呼び出しは、即座に合法とみなされます。これは一般的に問題ありません。なぜなら、再入時に問題となる複雑なコンテキストを構築するのは主に EE スレッドだからです。また、正確性を保証するのは最終的にプロファイラーの責任です。前述のように、パフォーマンス上の理由から、プロファイリング API は歴史的に正確性チェックを最小限にとどめ、負荷を増加させないようにしています。通常、プロファイラーが EE スレッドではないスレッド上で行う Info 呼び出しは、以下のカテゴリに分類されます：
 
-#### Enter / leave hooks
+- サーバー GC を行っているスレッドでの GC コールバック中に行われる Info 呼び出し。
+- プロファイラーが作成したスレッド上で行われる Info 呼び出し（例：サンプリングスレッド。したがってスタック上に CLR コードがない）。
 
-If a profiler requests enter / leave hooks and uses the fast path (i.e., direct function calls from the jitted code to the profiler with no intervening profiling API code), then any call to an Info function from within its enter / leave hooks will be considered asynchronous.  Again, this is for pragmatic reasons.  If profiling API code doesn't get a chance to run (for performance), then we have no opportunity to set the EE Thread bit stating that we're executing inside a callback.  This means a profiler is restricted to calling only asynchronous-safe Info functions from within its enter / leave hook.  This is typically acceptable, as a profiler concerned enough with perf that it requires direct function calls for enter / leave will probably not be calling any Info functions from within its enter / leave hooks anyway.
+#### Enter / Leave フック
 
-The alternative is for the profiler to set a flag specifying that it wants argument or return value information, which forces an intervening profiling API C function to be called to prepare the information for the profiler's Enter / Leave hooks.  When such a flag is set, the profiling API sets the EE Thread bit from inside this C function that prepares the argument / return value information from the profiler.  This enables the profiler to call synchronous Info functions from within its Enter / Leave hook.
+プロファイラーが Enter / Leave フック (hook) を要求し、ファストパス (fast path)（すなわち、介在するプロファイリング API コードなしに、JIT コンパイルされたコードからプロファイラーへの直接関数呼び出し）を使用する場合、Enter / Leave フック内からの Info 関数の呼び出しはすべて非同期とみなされます。これもまた実用的な理由によるものです。プロファイリング API コードが実行される機会がなければ（パフォーマンスのため）、コールバック内で実行中であることを示す EE スレッドビットを設定する機会がありません。これは、プロファイラーが Enter / Leave フック内からは非同期安全な Info 関数のみを呼び出すことに制限されることを意味します。Enter / Leave に直接関数呼び出しを必要とするほどパフォーマンスを重視するプロファイラーは、おそらく Enter / Leave フック内から Info 関数を呼び出すことはないため、これは通常は許容されます。
 
-### Asynchronous
+もう一つの方法は、プロファイラーが引数または戻り値の情報を要求するフラグを設定することです。これにより、プロファイラーの Enter / Leave フックに情報を準備するために介在するプロファイリング API の C 関数が呼び出されることが強制されます。このようなフラグが設定されると、プロファイリング API は、プロファイラーの引数 / 戻り値情報を準備するこの C 関数の内部から EE スレッドビットを設定します。これにより、プロファイラーは Enter / Leave フック内から同期 Info 関数を呼び出すことが可能になります。
 
-Asynchronous Info functions are those that are safe to be called anytime (from a callback or not).  There are relatively few asynchronous Info functions.  They are what a hijacking sampling profiler (e.g., Visual Studio profiler) might want to call from within one of its samples.  It is critical that an Info function labeled as asynchronous be able to execute from any possible call stack.  A thread could be interrupted while holding any number of locks (spin locks, thread store lock, OS heap lock, etc.), and then forced by the profiler to reenter the runtime via an asynchronous Info function.  This can easily cause deadlock or data corruption.  There are two ways an asynchronous Info function can ensure its own safety:
+### 非同期
 
-- Be very, very simple. Don't take locks, don't trigger a GC, don't access data that could be inconsistent, etc. OR
-- If you need to be more complex than that, have sufficient checks at the top to ensure locks, data structures, etc., are in a safe state before proceeding.
-    - Often, this includes asking whether the current thread is currently inside a forbid suspend thread region, and bailing with an error if it is, though this is not a sufficient check in all cases.
-    - DoStackSnapshot is an example of a complex asynchronous function. It uses a combination of checks (including asking whether the current thread is currently inside a forbid suspend thread region) to determine whether to proceed or bail.
+非同期 Info 関数は、いつでも（コールバック中であるかどうかに関わらず）安全に呼び出せる関数です。非同期 Info 関数は比較的少数です。これらは、ハイジャッキング型のサンプリングプロファイラー (hijacking sampling profiler)（例：Visual Studio プロファイラー）がサンプル内から呼び出したいものです。非同期とラベル付けされた Info 関数が、あらゆる可能なコールスタックから実行できることは極めて重要です。スレッドは、任意の数のロック（スピンロック (spin lock)、スレッドストアロック (thread store lock)、OS ヒープロック (OS heap lock) など）を保持している最中に割り込まれ、プロファイラーによって非同期 Info 関数を介してランタイムに再入させられる可能性があります。これは容易にデッドロック (deadlock) やデータ破壊 (data corruption) を引き起こし得ます。非同期 Info 関数が自身の安全性を確保する方法は 2 つあります：
 
-Contracts
----------
+- 非常に非常にシンプルにする。ロックを取得しない、GC をトリガーしない、不整合な可能性のあるデータにアクセスしない、など。**または**
+- それよりも複雑にする必要がある場合、先頭に十分なチェックを設けて、ロックやデータ構造などが安全な状態にあることを確認してから処理を続行する。
+  - 多くの場合、これには現在のスレッドが現在 Forbid Suspend Thread リージョン内にあるかどうかを確認し、そうであればエラーで中止することが含まれるが、すべてのケースで十分なチェックではない。
+  - DoStackSnapshot は複雑な非同期関数の例である。チェックの組み合わせ（現在のスレッドが現在 Forbid Suspend Thread リージョン内にあるかどうかの確認を含む）を使用して、処理を続行するか中止するかを判定する。
 
-Each and every Info function must have some common gunk at the top.  Here's an example:
+::: tip 💡 初心者向け補足
+「ハイジャッキング (hijacking)」とは、プロファイラーがターゲットスレッドを一時停止し、そのスレッドの命令ポインタを変更して自分のコードを実行させることで、実行の制御を「乗っ取る」手法のことです。サンプリングプロファイラー（Visual Studio のパフォーマンス分析ツールなど）がスレッドの実行状態を定期的にスナップショットするために使用します。この手法では、ターゲットスレッドがあらゆる状態（ロック保持中、GC 中など）にある可能性があるため、ハイジャック中に呼び出される関数は非常に慎重に設計される必要があります。
+:::
+
+## コントラクト
+
+各 Info 関数には、先頭にいくつかの共通の定型コードが必要です。以下は例です：
 
     CONTRACTL
     {
@@ -174,66 +181,61 @@ Each and every Info function must have some common gunk at the top.  Here's an e
                                      "**PROF: EnumModuleFrozenObjects 0x%p.\n",
                                      moduleID));
 
-Here are the "preferred" values for each contract type.  Note these are mostly different from the preferred values for Callbacks!  If that confuses you, reread section 2.
+以下は、各コントラクトの種類に対する「推奨値」です。これらはコールバックの推奨値とはほとんど異なることに注意してください！混乱した場合は、上記の設計哲学のセクションを読み直してください。
 
-| Preferred | Why | Details |
-| --------- | --- | ------- |
-| NOTHROW | Makes it easier for profiler to call; profiler doesn't need its own try / catch. | If your callees are NOTHROW then use NOTHROW.  Otherwise, it's actually better to mark yourself as THROWS than to set up your own try / catch.  The profiler can probably do this more efficiently by sharing a try block among multiple Info calls. |
-| GC\_NOTRIGGER | Safer for profiler to call from more situations | Go out of your way not to trigger.  If an Info function _might_ trigger (e.g., loading a type if it's not already loaded), ensure there's a way, if possible, for the profiler to specify _not_ to take the trigger path (e.g., fAllowLoad parameter that can be set to FALSE), and contract that conditionally. |
-| MODE\_ANY | Safer for profiler to call from more situations | MODE\_COOPERATIVE is fair if your parameters or returns are ObjectIDs.  Otherwise, MODE\_ANY is strongly preferred. |
-| CANNOT\_TAKE\_LOCK | Safer for profiler to call from more situations | Ensure your callees don't lock.  If they must, comment exactly what locks are taken. |
-| Optional:EE\_THREAD\_NOT\_REQUIRED | Allows profiler to use this Info fcn from GC callbacks and from profiler-spun threads (e.g., sampling thread). | These contracts are not yet enforced, so it's fine to just leave it blank.  If you're pretty sure your Info function doesn't need (or call anyone who needs) a current EE Thread, you can specify EE\_THREAD\_NOT\_REQUIRED as a hint for later when the thread contracts are enforced. |
+| 推奨値                             | 理由                                                                                                                                     | 詳細                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NOTHROW                            | プロファイラーにとって呼び出しが容易になる。プロファイラー自身の try / catch が不要。                                                    | 呼び出し先が NOTHROW であれば NOTHROW を使用する。そうでない場合は、自前の try / catch を設定するよりも自身を THROWS とマークするほうが実際には良い。プロファイラーは、複数の Info 呼び出しを共有の try ブロックで囲むことにより、おそらくより効率的に処理できる。                                            |
+| GC_NOTRIGGER                       | より多くの状況からプロファイラーが安全に呼び出せる。                                                                                     | トリガーしないように最大限努力する。Info 関数がトリガーする*可能性*がある場合（例：まだロードされていない型をロードする場合）、可能であればプロファイラーがトリガーパスを取ら*ない*ように指定できる手段を確保する（例：FALSE に設定できる fAllowLoad パラメータ）。そして、コントラクトを条件付きで記述する。 |
+| MODE_ANY                           | より多くの状況からプロファイラーが安全に呼び出せる。                                                                                     | パラメータまたは戻り値が ObjectID の場合は MODE_COOPERATIVE が妥当。それ以外では MODE_ANY が強く推奨される。                                                                                                                                                                                                  |
+| CANNOT_TAKE_LOCK                   | より多くの状況からプロファイラーが安全に呼び出せる。                                                                                     | 呼び出し先がロックを取得しないことを確認する。取得する必要がある場合は、正確にどのロックが取得されるかコメントする。                                                                                                                                                                                          |
+| オプション：EE_THREAD_NOT_REQUIRED | プロファイラーが GC コールバックやプロファイラーが起動したスレッド（例：サンプリングスレッド）からこの Info 関数を使用できるようにする。 | これらのコントラクトはまだ強制されていないため、空欄のままにしても問題ない。Info 関数が現在の EE スレッドを必要としない（またはそれを必要とする関数を呼び出さない）と確信できる場合は、スレッドコントラクトが強制されるようになったときのヒントとして EE_THREAD_NOT_REQUIRED を指定できる。                   |
 
-Here's an example of commented contracts in a function that's not as "yay" as the one above:
+以下は、上記の例ほど「Yay!」ではない関数のコメント付きコントラクトの例です：
 
     CONTRACTL
     {
-        // ModuleILHeap::CreateNew throws
+        // ModuleILHeap::CreateNew がスローする
         THROWS;
 
-        // AppDomainIterator::Next calls AppDomain::Release which can destroy AppDomain, and
-        // ~AppDomain triggers, according to its contract.
+        // AppDomainIterator::Next が AppDomain::Release を呼び出し、AppDomain を破棄する可能性があり、
+        // ~AppDomain はコントラクトによるとトリガーする。
         GC_TRIGGERS;
 
-        // Need cooperative mode, otherwise objectId can become invalid
+        // 協調モードが必要。そうでないと objectId が無効になる可能性がある
         if (GetThreadNULLOk() != NULL) { MODE_COOPERATIVE;  }
 
         // Yay!
         EE_THREAD_NOT_REQUIRED;
 
-        // Generics::GetExactInstantiationsFromCallInformation eventually
-        // reads metadata which causes us to take a reader lock.
+        // Generics::GetExactInstantiationsFromCallInformation が最終的に
+        // メタデータを読み取り、リーダーロックを取得する。
         CAN_TAKE_LOCK;
     }
     CONTRACTL_END;
 
-Entrypoint macros
------------------
+## エントリポイントマクロ
 
-After the contracts, there should be an entrypoint macro.  This takes care of logging and, in the case of a synchronous function, consulting callback state flags to enforce it's really called synchronously.  Use one of these, depending on whether the Info function is synchronous, asynchronous, or callable only from within the Initialize callback:
+コントラクトの後には、エントリポイントマクロを配置する必要があります。このマクロは、ログの記録と、同期関数の場合はコールバック状態フラグを参照して本当に同期的に呼び出されているかを強制する処理を担います。Info 関数が同期か、非同期か、または Initialize コールバック内からのみ呼び出し可能かに応じて、以下のいずれかを使用してください：
 
-- PROFILER\_TO\_CLR\_ENTRYPOINT\_**SYNC** _(typical choice)_
-- PROFILER\_TO\_CLR\_ENTRYPOINT\_**ASYNC**
-- PROFILER\_TO\_CLR\_ENTRYPOINT\_CALLABLE\_ON\_INIT\_ONLY
+- PROFILER*TO_CLR_ENTRYPOINT\_**SYNC** *（典型的な選択）\_
+- PROFILER_TO_CLR_ENTRYPOINT\_**ASYNC**
+- PROFILER_TO_CLR_ENTRYPOINT_CALLABLE_ON_INIT_ONLY
 
-As described above, asynchronous Info methods are rare and carry a higher burden.  The preferred contracts above are even "more preferred" if the method is asynchronous, and these 2 are outright required: GC\_NOTRIGGER & MODE\_ANY.  CANNOT\_TAKE\_LOCK, while even more preferred in an async than sync function, is not always possible.  See _Asynchronous_ section above for what to do.
+前述のように、非同期 Info メソッドはまれであり、より高い負担が伴います。上記の推奨コントラクトは非同期メソッドの場合「さらに推奨」であり、以下の 2 つは完全に必須です：GC_NOTRIGGER と MODE_ANY。CANNOT_TAKE_LOCK は、非同期関数では同期関数よりもさらに推奨されますが、常に可能なわけではありません。その場合の対処法については、上記の「非同期」セクションを参照してください。
 
-Files You'll Modify
-===================
+## 変更対象のファイル
 
-It's pretty straightforward where to go, to add or modify methods, and code inspection is all you'll need to figure it out.  Here are the places you'll need to go.
+メソッドの追加や変更のためにどこに行けばよいかは非常に明快であり、コードを見れば分かるでしょう。以下が訪れるべき場所です。
 
-corprof.idl
------------
+## corprof.idl
 
-All profiling API interfaces and types are defined in [src\inc\corprof.idl](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/corprof.idl). Go here first to define your types and methods.
+すべてのプロファイリング API インターフェースと型は [src\inc\corprof.idl](https://github.com/dotnet/runtime/blob/main/src/coreclr/inc/corprof.idl) で定義されています。まずここで型とメソッドを定義してください。
 
-EEToProfInterfaceImpl.\*
------------------------
+## EEToProfInterfaceImpl.\*
 
-Wrapper around the profiler's implementation of ICorProfilerCallback is located at [src\vm\EEToProfInterfaceImpl.\*](https://github.com/dotnet/runtime/tree/main/src/coreclr/vm).
+プロファイラーの ICorProfilerCallback 実装に対するラッパーは [src\vm\EEToProfInterfaceImpl.\*](https://github.com/dotnet/runtime/tree/main/src/coreclr/vm) にあります。
 
-ProfToEEInterfaceImpl.\*
------------------------
+## ProfToEEInterfaceImpl.\*
 
-Implementation of ICorProfilerInfo is located at [src\vm\ProfToEEInterfaceImpl.\*](https://github.com/dotnet/runtime/tree/main/src/coreclr/vm).
+ICorProfilerInfo の実装は [src\vm\ProfToEEInterfaceImpl.\*](https://github.com/dotnet/runtime/tree/main/src/coreclr/vm) にあります。

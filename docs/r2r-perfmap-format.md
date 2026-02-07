@@ -1,37 +1,48 @@
-# Ready to run PerfMap format
+# Ready to Run PerfMap フォーマット
 
 ::: info 原文
 この章の原文は [Ready to run PerfMap format](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/r2r-perfmap-format.md) です。
 :::
 
-Traditionally in .NET symbols have been described using PDBs. These are used to map IL to source lines for code that the JIT will compile. The JIT usually emits the data that can then map from IL to a native address for symbolication purposes.
+従来、.NET ではシンボル (symbol) は PDB を使って記述されてきました。PDB は、JIT がコンパイルするコードについて、IL をソースの行にマッピングするために使用されます。JIT は通常、IL からネイティブアドレス (native address) へのマッピングデータを出力し、これによりシンボル解決 (symbolication) が可能になります。
 
-Ready to run, however, avoids this IL to native code translation at runtime. For this reason, tools that emit R2R images often need to emit auxiliary artifacts to facilitate the mapping between source and native addresses. The Ready to Run PerfMap format describes such one map - where any method in the source code is associated with a region within the R2R image. That way any region from such image that gets executed can be linked back to a method at the source level. This facilitates tasks like stack symbolication for performance oriented investigations, although it is not appropriate to aid in tasks such as debugging at the source line level.
+::: tip 💡 初心者向け補足
+**PDB** (Program Database) は、デバッグ情報を格納するファイル形式です。Java の `.class` ファイルにデバッグ情報が埋め込まれるのと似た役割ですが、.NET では別ファイルとして管理されます。**IL** (Intermediate Language) は .NET のバイトコードで、Java のバイトコードに相当します。JIT コンパイラ (JIT compiler) が IL をネイティブコード (native code) に変換して実行します。
+:::
 
-## Version 1
+しかし、Ready to Run (R2R) では、実行時にこの IL からネイティブコードへの変換が行われません。そのため、R2R イメージ (image) を出力するツールは、ソースとネイティブアドレスの間のマッピングを容易にするための補助的な成果物 (artifact) を出力する必要があることがよくあります。Ready to Run PerfMap フォーマットは、そのようなマップの一つを記述するものです。ここでは、ソースコード内の各メソッド (method) が R2R イメージ内の領域 (region) に関連付けられます。これにより、そのイメージから実行される任意の領域を、ソースレベルのメソッドに紐づけることができます。これはパフォーマンス調査のためのスタックシンボル解決 (stack symbolication) のようなタスクを容易にしますが、ソース行レベルでのデバッグのようなタスクには適していません。
 
-R2R PerfMaps of version 1 are usually found in files with the extension `.ni.r2rmap`. It's a plain text UTF-8 format where each entry is on a separate line. Each entry is composed of a triplet: an offset relative to the beginning of the image, a length, and a name. The file is laid out in the following as follows.
+::: tip 💡 初心者向け補足
+**Ready to Run (R2R)** は、.NET アプリケーションの起動を高速化するための AOT (Ahead-of-Time) コンパイル技術です。通常の .NET では、実行時に JIT が IL をネイティブコードに変換しますが、R2R ではあらかじめネイティブコードを生成しておき、起動時間を短縮します。しかし、事前にコンパイルされているため、「どのネイティブコードがどのメソッドに対応するか」という情報を別途保持する必要があります。それが PerfMap の役割です。
+:::
 
-### Header
+## バージョン 1
 
-The header leads the file and is composed by special entries. Each entry contains a 4 byte integer token in place of an RVA signifying the type of information in the entry, a length that is always 0, and the entry data. The entries are emitted in the following order.
+バージョン 1 の R2R PerfMap は、通常 `.ni.r2rmap` という拡張子のファイルとして存在します。プレーンテキストの UTF-8 形式で、各エントリ (entry) は個別の行に記述されます。各エントリは、イメージの先頭からの相対オフセット (offset)、長さ (length)、名前 (name) の3つ組 (triplet) で構成されます。ファイルは以下のように配置されます。
 
-| Token      | Description                                                           |
-|:-----------|-----------------------------------------------------------------------|
-| 0xFFFFFFFF | A 16 byte sequence representing a signature to correlate the perfmap with the r2r image. |
-| 0xFFFFFFFE | The version of the perfmap being emitted as a unsigned 4 byte integer. |
-| 0xFFFFFFFD | An unsigned 4 byte unsigned integer representing the OS the image targets. See [enumerables section](#enumerables-used-in-headers)  |
-| 0xFFFFFFFC | An unsigned 4 byte unsigned integer representing the architecture the image targets. See [enumerables section](#enumerables-used-in-headers) |
-| 0xFFFFFFFB | An unsigned 4 byte unsigned integer representing the ABI of the image. See [enumerables section](#enumerables-used-in-headers) |
+### ヘッダー
 
-These entries contain information about the compilation that can be useful to tools and identifiers that can be used to correlate a perfmap with an image as described in ["Ready to Run format - debug directory entries"](./readytorun-format#additions-to-the-debug-directory).
+ヘッダー (header) はファイルの先頭に位置し、特別なエントリで構成されます。各エントリは、RVA の代わりにエントリ内の情報の種類を示す 4 バイト整数のトークン (token)、常に 0 の長さ、およびエントリデータを含みます。エントリは以下の順序で出力されます。
 
+| トークン   | 説明                                                                                                                                     |
+| :--------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 0xFFFFFFFF | PerfMap を R2R イメージと関連付けるための署名 (signature) を表す 16 バイトのシーケンス。                                                 |
+| 0xFFFFFFFE | 出力される PerfMap のバージョンを表す符号なし 4 バイト整数。                                                                             |
+| 0xFFFFFFFD | イメージが対象とする OS を表す符号なし 4 バイト整数。[列挙値のセクション](#ヘッダーで使用される列挙値)を参照。                           |
+| 0xFFFFFFFC | イメージが対象とするアーキテクチャ (architecture) を表す符号なし 4 バイト整数。[列挙値のセクション](#ヘッダーで使用される列挙値)を参照。 |
+| 0xFFFFFFFB | イメージの ABI を表す符号なし 4 バイト整数。[列挙値のセクション](#ヘッダーで使用される列挙値)を参照。                                    |
 
-### Content
+これらのエントリには、ツールにとって有用なコンパイルに関する情報と、["Ready to Run フォーマット - デバッグディレクトリエントリ"](./readytorun-format#additions-to-the-debug-directory)に記述されているように PerfMap をイメージと関連付けるために使用できる識別子 (identifier) が含まれています。
 
-Each entry is a triplet - the relative address of a method with respect to the image start as an unsigned 4 byte integer, the number of bytes used by the native code represented by an unsigned 2 byte integer, and the name of the method. There's one entry per line after the header, and a method can appear more than once since if may have gone through cold/hot path splitting.
+::: tip 💡 初心者向け補足
+**RVA** (Relative Virtual Address) は、実行可能ファイルがメモリにロードされたときの、ベースアドレスからの相対的なアドレスです。**ABI** (Application Binary Interface) は、コンパイルされたコードがオペレーティングシステムやハードウェアとやり取りするための低レベルなインターフェース仕様です。呼び出し規約 (calling convention) やデータのメモリ上の配置方法などを定義しています。
+:::
 
-## Enumerables used in headers.
+### コンテンツ
+
+各エントリは3つ組 (triplet) です。イメージの先頭からのメソッドの相対アドレス (relative address) を表す符号なし 4 バイト整数、ネイティブコードが使用するバイト数を表す符号なし 2 バイト整数、そしてメソッドの名前です。ヘッダーの後に 1 行に 1 エントリが記述され、コールド/ホットパス分割 (cold/hot path splitting) が行われた場合、同一メソッドが複数回出現することがあります。
+
+## ヘッダーで使用される列挙値
 
 ```
 PerfMapArchitectureToken

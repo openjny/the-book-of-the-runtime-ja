@@ -4,7 +4,7 @@
 この章の原文は [Type System](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/type-system.md) です。
 :::
 
-著者: David Wrighton ([@davidwrighton](https://github.com/davidwrighton)) — 2010
+著者: David Wrighton ([@davidwrighton](https://github.com/davidwrighton)) - 2010
 
 ## はじめに
 
@@ -67,11 +67,11 @@ CLR の型システムは、ECMA 仕様に記述された型システムとそ�
 
 コアとなる型システムのデータ構造は、実際に読み込まれた型を表すデータ構造（TypeHandle、MethodTable、MethodDesc、TypeDesc、EEClass など）と、読み込まれた型を検索可能にするデータ構造（ClassLoader、Assembly、Module、RidMap など）に分類されます。
 
-型を読み込むためのデータ構造とアルゴリズムについては、Book of the Runtime の [型ローダー](type-loader.md) の章および [MethodDesc](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/method-descriptor.md) の章で説明されています。
+型を読み込むためのデータ構造とアルゴリズムについては、Book of the Runtime の [型ローダー](type-loader.md) の章および [メソッドディスクリプタ](method-descriptor.md) の章で説明されています。
 
 これらのデータ構造を結びつけるのが、JIT / リフレクション / 型ローダー / スタックウォーカーが既存の型やメソッドを検索できるようにする一連の機能です。基本的な考え方は、これらの検索が ECMA CLI 仕様で規定されたメタデータトークンやシグネチャによって容易に駆動できるようにすることです。
 
-そして最終的に、適切な型システムのデータ構造が見つかると、型から情報を収集したり、2 つの型を比較したりするアルゴリズムがあります。この種のアルゴリズムの特に複雑な例は、Book of the Runtime の [Virtual Stub Dispatch](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/virtual-stub-dispatch.md) の章で見ることができます。
+そして最終的に、適切な型システムのデータ構造が見つかると、型から情報を収集したり、2 つの型を比較したりするアルゴリズムがあります。この種のアルゴリズムの特に複雑な例は、Book of the Runtime の [仮想スタブディスパッチ](virtual-stub-dispatch.md) の章で見ることができます。
 
 ## 設計目標と非目標
 
@@ -358,5 +358,5 @@ ClassLoader は型を読み込むために使用されるコンポーネント�
 
 - [ECMA CLI 仕様](https://www.ecma-international.org/publications-and-standards/standards/ecma-335/)
 - [型ローダー](type-loader.md) — Book of the Runtime の章
-- [Virtual Stub Dispatch](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/virtual-stub-dispatch.md) — Book of the Runtime の章
-- [MethodDesc](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/method-descriptor.md) — Book of the Runtime の章
+- [仮想スタブディスパッチ](virtual-stub-dispatch.md) — Book of the Runtime の章
+- [メソッドディスクリプタ](method-descriptor.md) — Book of the Runtime の章

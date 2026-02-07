@@ -1,478 +1,271 @@
-# Guide For Porting
+# .NET を新しいプロセッサアーキテクチャへ移植するためのガイド
 
 ::: info 原文
 この章の原文は [Guide For Porting](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/guide-for-porting.md) です。
 :::
 
-This document is broken up into 2 major sections.
-
-1.  The various porting stages of porting the .NET Runtime
-
-2.  A technical discussion of the major components affected by a port to a new
-    architecture
-
-Porting stages and steps
-========================
-
-Porting the .NET Runtime to a new architecture typically follows along the
-following path.
-
-As engineering continues along the development path, it is best if the logic can
-be placed into the main branch of the runtime as soon as possible. This
-will have 2 major effects.
+このドキュメントは大きく2つのセクションに分かれています。
 
-1.  Individual commits are easier to review.
+1. .NET ランタイムの移植における各段階
+2. 新しいアーキテクチャへの移植で影響を受ける主要コンポーネントに関する技術的な議論
 
-2.  Not all approaches for fixing problems will always be considered acceptable.
-    It is plausible that a change may not ever be acceptable to take into
-    the upstream git repo, and discovering such issues early can avoid large
-    amounts of sunk cost.
+::: tip 💡 初心者向け補足
+「移植 (porting)」とは、あるプラットフォームやプロセッサアーキテクチャ向けに書かれたソフトウェアを、別のプラットフォームやアーキテクチャで動作するように適応させる作業のことです。たとえば、x86 向けに作られたランタイムを ARM64 で動くようにする、といった作業が該当します。
+:::
 
-3.  When some change is made which breaks other platforms, it will be relatively
-    simple to identify the break. If changes are held until after all changes
-    are complete and the product is fully functional, this work is likely to be
-    much more difficult.
+# 移植の段階とステップ
 
-Stage 1 Initial Bring Up
-------------------------
+.NET ランタイムを新しいアーキテクチャに移植する作業は、一般的に以下のような流れで進みます。
 
-Porting .NET to a new platform starts with porting CoreCLR to a new
-architecture.
+エンジニアリングが開発パスに沿って進む中で、ロジックはできるだけ早くランタイムのメインブランチ (main branch) に配置するのが最善です。これには主に2つの効果があります。
 
-The process follows the following strategy
+1. 個々のコミットがレビューしやすくなります。
 
--   Add a new target architecture to the build environment, and make it build.
+2. 問題の修正アプローチが必ずしも受け入れられるとは限りません。変更がアップストリームの Git リポジトリに受け入れられない可能性もあり、そのような問題を早期に発見することで、大量の埋没費用を回避できます。
 
--   Determine if there is sufficient incentive to bring up the interpreter, or
-    if simply making the jit handle the new architecture is cheaper. The
-    interpreter in the CLR is currently only used for bring up scenarios, and is
-    not maintained as generally working. It is expected that the interpreter
-    will take 1-2 months to enable for an engineer familiar with the CoreCLR
-    codebase. A functional interpreter allows the porting team to have a set of
-    engineers which focus exclusively on the JIT and a set which focuses on the
-    VM portion of the runtime.
+3. 他のプラットフォームを壊すような変更が行われた場合、破壊箇所を比較的簡単に特定できます。すべての変更を保留にして、製品が完全に機能するまで待ってから反映しようとすると、この作業ははるかに困難になりやすいです。
 
--   Build up a set of scripts that will run the coreclr tests. The normal
-    routine for running coreclr tests is XUnit, which is only suitable once the
-    framework is mostly functional. These scripts will evolve during the
-    development effort to support ever increasing needs of development. This set
-    of scripts will be expected to do the following tasks.
+## ステージ1：初期のブリングアップ (Initial Bring Up)
 
-    -   Run a subset of the tests. Tests are arranged in a directory structure
-        by category, so this subsetting mechanism will only need to be a
-        directory structure system.
+.NET を新しいプラットフォームに移植するには、まず CoreCLR を新しいアーキテクチャに移植することから始めます。
 
-    -   Some set of tests will need to be excluded on a test by test basis. Once
-        the product is ready to ship, most of these disabled tests will need to
-        have been re-enabled, but there are tests which will be disabled for
-        months/years as the product is brought up to quality.
+このプロセスは以下の戦略に従います。
 
-    -   Produce crash or core dumps. The failure mode of many tests during this
-        phase will be a crash. A test running tool that captures core dumps will
-        make these issues easier to diagnose.
-
-    -   Produce bucketized lists of failures. Generally the approach is to group
-        by assertion, and if there is a crash, group by callstack of crash.
-
--   The first test category to focus on is the JIT category, to bring up the
-    general ability to run .NET code. Most of these tests are very simple, but
-    getting some code to work is a prerequisite for handling more complex
-    scenarios. When doing initial bringup, configuring the Gen0 budget of the GC
-    to be a large number so that the GC does not attempt to run during most
-    tests is very useful. (Set `DOTNET_GCgen0size=99999999`)
+- 新しいターゲットアーキテクチャをビルド環境に追加し、ビルドできるようにします。
 
--   Once basic code is executing, the focus shifts to enabling the GC to work.
-    In this initial phase, the correct choice is to enable conservative GC
-    tracking via the `FEATURE_CONSERVATIVE_GC` macro. This feature will make
-    garbage collection largely function correctly, but it is not suitable for
-    production use of .NET, and can under certain circumstances trigger
-    unbounded memory use.
+- インタープリタ (interpreter) をブリングアップする十分なインセンティブがあるか、それとも単に JIT に新しいアーキテクチャを対応させる方が安価かを判断します。CLR のインタープリタは現在ブリングアップシナリオにのみ使用されており、一般的に動作する状態としてはメンテナンスされていません。CoreCLR のコードベースに精通したエンジニアがインタープリタを有効にするには1～2ヶ月かかると想定されます。機能するインタープリタがあれば、移植チームは JIT に専念するエンジニアと VM 部分に専念するエンジニアに分かれて作業できます。
 
--   Once basic GC works, and basic JIT functionality is present, work can fan
-    out into all of the various features of the runtime. Of particular interest
-    to engineers porting the runtime are the EH, stackwalking, and interop
-    portions of the test suite.
+::: tip 💡 初心者向け補足
+「ブリングアップ (bring up)」とは、新しいハードウェアやプラットフォーム上でソフトウェアを初めて動作させるプロセスのことです。Java でいえば、新しいアーキテクチャ上で JVM を初めて起動させるような作業に相当します。JIT (Just-In-Time コンパイラ) は実行時にコードをコンパイルし、インタープリタは命令を1つずつ解釈して実行します。
+:::
 
--   During this phase, porting the SOS plugin from the
-    <https://github.com/dotnet/diagnostics> will be very useful. The various
-    commands available via that tool such as dumpmt, dumpdomain and such are
-    regularly useful to developers attempting to port the runtime.
-
-Stage 2 Expand scenario coverage
---------------------------------
-
--   Once the coreclr tests are largely passing, the next step is to enable
-    XUnit. At this time the clr is probably mostly capable of running XUnit
-    tests, and adding testing using the libraries tests will require XUnit to
-    work well.
-
--   Once XUnit is functional, bring up the libraries set of tests. There
-    is quite a lot of the CoreCLR codebase that is largely only tested by the
-    libraries test suites.
-
--   Engineers should also begin to attempt real scenario tests at this point,
-    such as ASP.NET Core applications. If the libraries test suites work, then
-    ASP.NET Core should as well.
-
-Stage 3 Focus on performance
-----------------------------
+- CoreCLR のテストを実行するスクリプトのセットを構築します。CoreCLR テストを実行する通常の手段は XUnit ですが、これはフレームワークがおおむね機能するようになってから初めて適切に使えるようになります。これらのスクリプトは開発の進行に伴い、ますます増える開発ニーズに対応するよう進化していきます。このスクリプトセットには以下のタスクが期待されます。
+  - テストのサブセットを実行する。テストはディレクトリ構造でカテゴリ別に整理されているため、このサブセット化の仕組みはディレクトリ構造ベースのシステムだけで十分です。
 
--   Throughput performance at this time is likely to be not that great. There
-    are three major opportunities to improve performance at this stage.
+  - 一部のテストをテスト単位で除外する必要があります。製品の出荷準備が整った時点で、無効化されたテストの大部分を再有効化する必要がありますが、製品の品質が十分に高まるまで数ヶ月～数年間無効化されたままとなるテストもあります。
 
-    -   Replace conservative GC with precise GC.
+  - クラッシュダンプまたはコアダンプを生成する。このフェーズでは多くのテストの失敗モードがクラッシュになります。コアダンプをキャプチャするテスト実行ツールがあれば、こうした問題の診断が容易になります。
 
-    -   Tune the assembly stubs to be high performance on the platform,
-        and implement optional assembly stubs where hand-written assembly would
-        be faster than the equivalent C++ code.
+  - 失敗をバケット化したリストを生成する。一般的なアプローチは、アサーションでグループ化し、クラッシュの場合はクラッシュのコールスタックでグループ化することです。
 
-    -   Improve the code generated by the JIT.
+- 最初に注力すべきテストカテゴリは JIT カテゴリです。これは .NET コードを実行する基本的な能力をブリングアップするためです。これらのテストのほとんどは非常にシンプルですが、何らかのコードを動作させることは、より複雑なシナリオを扱うための前提条件です。初期ブリングアップの際は、GC の Gen0 バジェットを大きな数値に設定して、ほとんどのテスト中に GC が実行を試みないようにすると非常に便利です。（`DOTNET_GCgen0size=99999999` を設定）
 
--   Up until this point, engineers have probably been using the JIT for all code
-    instead of bringing the Ready To Run compiler (crossgen/crossgen2) into
-    usage on the platform. Implementing the ahead of the time compiler starts to
-    be useful at this time to improve startup performance.
+::: tip 💡 初心者向け補足
+Gen0 バジェットとは、ガベージコレクタ (GC) が第0世代のヒープにどれだけのメモリを割り当ててからコレクションを開始するかを制御するパラメータです。この値を非常に大きくすると、GC がほぼ起動しなくなるため、GC が未完成の段階でも JIT の基本動作のテストに集中できます。
+:::
 
-Stage 4 Focus on stress
------------------------
+- 基本的なコードが実行できるようになったら、次は GC を動作させることに注力します。この初期フェーズでは、`FEATURE_CONSERVATIVE_GC` マクロを使って保守的 GC トラッキング (conservative GC tracking) を有効にするのが正しい選択です。この機能によりガベージコレクションはおおむね正しく機能しますが、.NET の本番利用には適しておらず、特定の状況下で際限のないメモリ使用を引き起こす可能性があります。
 
--   Stress testing the system is necessary to provide confidence that the system
-    really works.
+- 基本的な GC が動作し、基本的な JIT 機能が揃ったら、ランタイムのさまざまな機能に広げて作業できます。ランタイムを移植するエンジニアにとって特に関心が高いのは、EH（例外処理）、スタックウォーキング (stackwalking)、および相互運用 (interop) のテストスイートです。
 
--   See the various test passes done in CI, but most critically GCStress testing
-    is needed. See documentation around use of the DOTNET_GCStress environment
-    variable.
+- このフェーズでは、<https://github.com/dotnet/diagnostics> から SOS プラグインを移植することが非常に有用です。このツールで利用できる dumpmt、dumpdomain などのさまざまなコマンドは、ランタイムの移植を試みる開発者にとって日常的に役立ちます。
 
-Stage 5 productization
-----------------------
+## ステージ2：シナリオカバレッジの拡大 (Expand Scenario Coverage)
 
--   Productization is about making the runtime able to run shipped effectively
-    on a platform.
+- CoreCLR のテストがおおむねパスするようになったら、次のステップは XUnit を有効にすることです。この時点で CLR はおそらく XUnit テストを実行できるだけの能力をおおむね備えており、ライブラリテストを使ったテストの追加には XUnit が正しく動作する必要があります。
 
--   This document does not attempt to list out the work here as it is largely
-    specific to the platform in use and the opinions of numerous stakeholders.
+- XUnit が機能するようになったら、ライブラリのテストセットをブリングアップします。CoreCLR コードベースの相当部分は、ライブラリのテストスイートによってのみテストされています。
 
-Design issues
-=============
+- エンジニアはこの時点で、ASP.NET Core アプリケーションなどの実際のシナリオテストも開始すべきです。ライブラリのテストスイートが動作すれば、ASP.NET Core も動作するはずです。
 
-These large architecture specific design issues will have substantial impact on
-both the JIT and VM.
+## ステージ3：パフォーマンスへの注力 (Focus on Performance)
 
-1.  Calling convention rules – Caller pop vs Callee pop, HFA arguments,
-    structure argument passing rules, etc. CoreCLR is designed to utilize a
-    broadly similar ABI to the OS api. Managed to managed calls typically have a
-    small set of tweaks or extensions to the ABI for VM efficiency purposes, but it
-    is generally intended that the ABI of managed code and the ABI of native
-    code are very similar. (This is not a hard requirement, and on Windows X86
-    the runtime supports a managed to managed abi as well as 3 separate native
-    abis for interop, but this scheme is generally not recommended.) See the
-    [CLR-ABI](./clr-abi) document for how the existing architectures work.
-    Ensure that the CLR-ABI document is updated with all the requisite details
-    and special cases of the new platform. When defining the behavior of a new
-    processor architecture abi for CoreCLR, we must maintain that:
+- この時点でスループットパフォーマンスはおそらくあまり良くないでしょう。このステージではパフォーマンスを改善するための3つの主要な機会があります。
+  - 保守的 GC を正確な GC (precise GC) に置き換える。
 
-    1.  The `this` pointer is always passed in the same register regardless of
-        other parameters.
+  - アセンブリスタブ (assembly stubs) をプラットフォーム上で高性能になるようチューニングし、手書きのアセンブリが同等の C++ コードよりも高速になるオプションのアセンブリスタブを実装する。
 
-    2.  Various stub types will require an extra "secret" parameter. Perf
-        details typically drive exactly where these are placed.
+  - JIT が生成するコードを改善する。
 
-    3.  When executing managed code it must be possible to hijack the return
-        address. Current implementations require that the return address always
-        be on the stack to do so, although this is a known performance
-        deficiency for RISC platforms on arm64.
+- この時点まで、エンジニアはおそらく Ready To Run コンパイラ (crossgen/crossgen2) をプラットフォームで使用する代わりに、すべてのコードに JIT を使用してきたでしょう。AOT (Ahead-Of-Time) コンパイラの実装は、起動パフォーマンスを向上させるためにこの時点から有用になり始めます。
 
-2.  Architecture specific relocation information (to represent generation of
-    relocations for use by load, store, jmp and call instructions) See
-    <https://learn.microsoft.com/windows/win32/debug/pe-format#coff-relocations-object-only>
-    for the sort of details that need to be defined.
+::: tip 💡 初心者向け補足
+「保守的 GC (conservative GC)」は、メモリ上の値が GC 参照かどうかを厳密に判別せず、「参照かもしれない」値はすべて参照として扱います。これにより実装は簡単になりますが、本来回収できるメモリを回収できない場合があります。「正確な GC (precise GC)」は、各値が参照かどうかを正確に把握するため効率的ですが、JIT や VM からの正確なメタデータが必要です。
+:::
 
-3.  Behavior and accessibility of processor single step features from within a
-    process. On Unix the CLR debugger uses an in process thread to single step
-    through functions.
+## ステージ4：ストレスへの注力 (Focus on Stress)
 
-4.  Unwind information. CoreCLR uses Windows style unwind data internally, even
-    on Unix platforms. A Windows style unwind structure must be defined. In
-    addition, it is possible to enable generation of DWARF data for exposure
-    through the GDB JIT
-    <https://sourceware.org/gdb/onlinedocs/gdb/JIT-Interface.html> . This
-    support is conditional on an \#ifdef, but has been used in the past to
-    support bring up of new platforms.
+- システムが本当に動作するという信頼性を確保するためには、ストレステスト (stress testing) が必要です。
 
-5.  EH Funclets. .NET requires a 2 pass exception model in order to properly
-    support exception filters. This substantially differs from the typical
-    Itanium ABI model which is used on most Linux architectures
+- CI で行われるさまざまなテストパスを参照してください。特に重要なのは GCStress テストです。`DOTNET_GCStress` 環境変数の使用に関するドキュメントを参照してください。
 
-6.  OS behavior with Signals. Especially exactly where the reported instruction
-    pointer is located.
+## ステージ5：製品化 (Productization)
 
-7.  Little vs big endian. While .NET runtimes have been ported to big endian in
-    the past (notable examples include Mono support various game consoles, and
-    POWER, and XNA support on Xbox360) there are no current ports of CoreCLR to
-    a big endian platform.
+- 製品化とは、ランタイムをプラットフォーム上で効果的に出荷・実行できるようにすることです。
 
-Components of the Runtime affected by a port to a new architecture
-==================================================================
+- このドキュメントでは、ここでの作業を列挙することは試みません。使用するプラットフォームや多数のステークホルダーの意見に大きく依存するためです。
 
-This a list of the notable architecture specific components of the .NET runtime.
-The list is not complete, but covers most of the areas where work will need to
-be done.
+# 設計上の課題
 
-Notable components
+以下の大きなアーキテクチャ固有の設計課題は、JIT と VM の両方に大きな影響を与えます。
 
-1.  The JIT. The jit maintains the largest concentration of architecture
-    specific logic in the stack. This is not surprising. See [Porting RyuJit](./porting-ryujit)
-    for guidance.
+1. 呼び出し規約 (calling convention) のルール – 呼び出し元スタック解放 (Caller pop) vs 呼び出し先スタック解放 (Callee pop)、HFA 引数、構造体の引数渡しルールなど。CoreCLR は OS の API と広く類似した ABI を利用するように設計されています。マネージド間呼び出しには通常、VM の効率のために ABI に対する小さな調整や拡張のセットがありますが、マネージドコードの ABI とネイティブコードの ABI は一般的に非常に類似することが意図されています。（これは厳格な要件ではなく、Windows X86 ではランタイムはマネージド間 ABI に加えて、相互運用のための3つの別々のネイティブ ABI をサポートしていますが、このスキームは一般的に推奨されません。）既存アーキテクチャの動作については [CLR ABI](./clr-abi) ドキュメントを参照してください。新しいプラットフォームのすべての必要な詳細と特殊ケースで CLR ABI ドキュメントが更新されていることを確認してください。CoreCLR の新しいプロセッサアーキテクチャ ABI の動作を定義する際には、以下を維持する必要があります。
+   1. `this` ポインタは、他のパラメータに関係なく、常に同じレジスタで渡されること。
 
-2.  The CLR PAL. When porting to a non-Windows OS, the PAL will be the first component
-    that needs to be ported.
+   2. さまざまなスタブタイプが追加の「秘密の (secret)」パラメータを必要とすること。パフォーマンスの詳細が、これらがどこに配置されるかを通常決定します。
 
-3.  The CLR VM. The VM is a mix of completely architecture neutral logic, and
-    very machine specific paths.
+   3. マネージドコードの実行時に、リターンアドレスをハイジャック (hijack) することが可能でなければならないこと。現在の実装では、リターンアドレスが常にスタック上にある必要がありますが、これは ARM64 などの RISC プラットフォームにおける既知のパフォーマンス上の欠陥です。
 
-4.  The unwinder. The unwinder is used to unwind stacks on non-Windows platforms.
-    It is located in https://github.com/dotnet/runtime/tree/main/src/coreclr/unwinder.
+::: tip 💡 初心者向け補足
+ABI (Application Binary Interface) とは、コンパイルされたコード同士がどのように相互作用するかを定義する規約です。Java の JNI (Java Native Interface) に似た概念で、引数の渡し方、レジスタの使い方、スタックの管理方法などを規定します。「リターンアドレスのハイジャック」とは、ランタイムがスレッドを安全なポイントで停止させるために、関数の戻りアドレスを書き換えてランタイムのコードに制御を移すテクニックです。
+:::
 
-4.  System.Private.CoreLib/System.Reflection. There is little to no architecture
-    specific work here that is necessary for bringup. Nice-to-have work involves
-    adding support for the architecture in the
-    System.Reflection.ImageFileMachine enum, and the ProcessorArchitecture enum,
-    and logic that manipulates it.
+2. アーキテクチャ固有のリロケーション情報 (relocation information)（ロード、ストア、jmp、call 命令で使用されるリロケーションの生成を表現するため）。定義が必要な詳細の類例については <https://learn.microsoft.com/windows/win32/debug/pe-format#coff-relocations-object-only> を参照してください。
 
-5.  PE File format changes to add a new architecture. Also, the C# compiler likely
-    also needs a new switch to generate machine specific code for the new
-    architecture.
+3. プロセス内からのプロセッサのシングルステップ機能 (single step features) の動作とアクセシビリティ。Unix では CLR デバッガはプロセス内スレッドを使用して関数をシングルステップ実行します。
 
-6.  Crossgen/Crossgen2 - As the AOT compilers that produce machine specific logic
-    from general purpose MSIL, these will be needed to improve startup performance.
+4. アンワインド情報 (unwind information)。CoreCLR は Unix プラットフォーム上でも内部的に Windows スタイルのアンワインドデータを使用します。Windows スタイルのアンワインド構造体を定義する必要があります。さらに、GDB JIT <https://sourceware.org/gdb/onlinedocs/gdb/JIT-Interface.html> を通じて公開するための DWARF データの生成を有効にすることも可能です。このサポートは `#ifdef` による条件付きですが、過去に新しいプラットフォームのブリングアップをサポートするために使用されてきました。
 
-7.  R2RDump - This allows diagnosing issues in pre-compiled code.
+5. EH ファンクレット (EH Funclets)。.NET は例外フィルタ (exception filters) を適切にサポートするために、2パスの例外モデル (2 pass exception model) を必要とします。これは、ほとんどの Linux アーキテクチャで使用される典型的な Itanium ABI モデルとは大きく異なります。
 
-8.  coredistools - Necessary for GCStress (if determining instruction boundaries is
-    non-trivial), as well as for SuperPMI asm diffs for JIT development.
+6. シグナル (Signals) に関する OS の動作。特に、報告される命令ポインタ (instruction pointer) が正確にどこに位置するか。
 
-9.  debug and diagnostics components - The managed debugger and profiler are beyond
-    the scope of this document.
+7. リトルエンディアン (little endian) vs ビッグエンディアン (big endian)。過去に .NET ランタイムがビッグエンディアンに移植された例はあります（Mono がさまざまなゲームコンソールや POWER をサポートしていた例、Xbox360 での XNA サポートなどが顕著な例です）が、CoreCLR のビッグエンディアンプラットフォームへの現行の移植はありません。
 
-CLR PAL
-------
-The PAL provides a similar to Win32 api as the CLR codebase was originally designed
-to run on Windows platforms. Mostly the PAL is concerned with OS independence, but
-there are also architecture specific components.
+# 新しいアーキテクチャへの移植で影響を受けるランタイムのコンポーネント
 
-1. pal.h - Contains architecture specific details for handling unwinding scenarios
-    such as `CONTEXT` / `_KNONVOLATILE_CONTEXT_POINTERS`/ `_RUNTIME_FUNCTION`.
+これは、.NET ランタイムの注目すべきアーキテクチャ固有コンポーネントのリストです。このリストは完全ではありませんが、作業が必要となるほとんどの領域をカバーしています。
 
-2. Unwinding support in `seh-unwind.cpp`
+注目すべきコンポーネント
 
-3. context.cpp - Which manipulates and captures register contexts
+1. JIT。JIT はスタック内でアーキテクチャ固有のロジックの最大の集中を維持しています。これは驚くことではありません。ガイダンスについては [RyuJIT の移植](./porting-ryujit) を参照してください。
 
-4. jitsupport.cpp - Depending on how the features of the CPU are exposed, there
-   may need to be code to call OS apis to gather information about CPU features.
+2. CLR PAL。Windows 以外の OS に移植する場合、PAL が最初に移植が必要なコンポーネントとなります。
 
-5. pal arch directory - https://github.com/dotnet/runtime/tree/main/src/coreclr/pal/src/arch
-   This directory primarily contains assembly stubs for architecture specific
-   handling of signals and exceptions.
+3. CLR VM。VM は完全にアーキテクチャに依存しないロジックと、非常にマシン固有のパスが混在しています。
 
-In addition to the PAL source code, there is a comprehensive set of PAL tests located
-in https://github.com/dotnet/runtime/tree/main/src/coreclr/pal/tests.
+4. アンワインダ (unwinder)。アンワインダは Windows 以外のプラットフォームでスタックをアンワインドするために使用されます。<https://github.com/dotnet/runtime/tree/main/src/coreclr/unwinder> にあります。
 
-CLR VM
-------
+5. System.Private.CoreLib/System.Reflection。ブリングアップに必要なアーキテクチャ固有の作業はほとんど、またはまったくありません。あると望ましい作業としては、System.Reflection.ImageFileMachine enum および ProcessorArchitecture enum のアーキテクチャサポートの追加と、それらを操作するロジックがあります。
 
-The VM support for architecture specific logic is encoded in a variety of
-different ways.
+6. 新しいアーキテクチャを追加するための PE ファイルフォーマットの変更。また、C# コンパイラも新しいアーキテクチャ向けのマシン固有コードを生成するための新しいスイッチがおそらく必要です。
 
-1.  Entirely architecture specific components. These are held in an architecture
-    specific folder.
+7. Crossgen/Crossgen2 - 汎用の MSIL からマシン固有のロジックを生成する AOT コンパイラとして、起動パフォーマンスを向上させるために必要になります。
 
-2.  Features which are only enabled on certain architectures. E.g. `FEATURE_HFA`.
+8. R2RDump - 事前コンパイルされたコードの問題を診断できます。
 
-3.  Ad-hoc \#if blocks used for specific architectures. As needed these are
-    added. The general goal is to keep these to a minimum, but difficulty here
-    is primarily driven by what special behavior the processor architecture
-    requires.
+9. coredistools - GCStress（命令境界の判定が自明でない場合）、および JIT 開発用の SuperPMI asm diff に必要です。
 
-My recommendation would be to look at how Arm64 is implemented in the VM for the
-most up to date model of how to implement a CPU architecture.
+10. デバッグおよび診断コンポーネント - マネージドデバッガとプロファイラーはこのドキュメントの範囲外です。
 
-### Architecture Specific Components
+## CLR PAL
 
-There are a variety of architecture specific components that all architectures
-must implement.
+PAL は、CLR のコードベースがもともと Windows プラットフォーム上で動作するように設計されていたため、Win32 API に類似した API を提供します。PAL は主に OS の独立性に関わるものですが、アーキテクチャ固有のコンポーネントもあります。
 
-1.  Assembly Stubs
+1. pal.h - `CONTEXT` / `_KNONVOLATILE_CONTEXT_POINTERS` / `_RUNTIME_FUNCTION` などのアンワインドシナリオを処理するためのアーキテクチャ固有の詳細を含みます。
 
-2.  `cgencpu.h` (CPU specific header defining stubs and miscellaneous other CPU
-    specific details.)
+2. `seh-unwind.cpp` でのアンワインドサポート
 
-3.  VSD call stub generation (virtualcallstubcpu.hpp and associated logic)
+3. context.cpp - レジスタコンテキストの操作とキャプチャを行います。
 
-4.  Precode/Prestub/Jumpstub generation
+4. jitsupport.cpp - CPU の機能がどのように公開されるかに応じて、CPU の機能に関する情報を収集するために OS の API を呼び出すコードが必要になる場合があります。
 
-5.  `callingconventions.h`/`argdestination.h` Provides an implementation of the ABI used by VM
-    components. The implementation made architecture specific via a long series of
-    C preprocessor macros.
+5. PAL arch ディレクトリ - <https://github.com/dotnet/runtime/tree/main/src/coreclr/pal/src/arch>　このディレクトリには主に、シグナルと例外のアーキテクチャ固有の処理のためのアセンブリスタブが含まれています。
 
-6. `gcinfodecoder.h` The GC info format is architecture specific as it holds
-   information about which specific registers hold GC data. The implementation
-   is generally simplified to be defined in terms of register numbers, but if
-   the architecture has more registers available for use than existing architectures
-   then the format will need extension.
+PAL のソースコードに加えて、<https://github.com/dotnet/runtime/tree/main/src/coreclr/pal/tests> に包括的な PAL テストのセットがあります。
 
-#### Assembly Stubs
+## CLR VM
 
-There are many reasons for which the runtime requires various assembly stubs.
-Here is an annotated list of the stubs implemented for Unix on Arm64.
+VM のアーキテクチャ固有のロジックのサポートは、さまざまな方法でエンコードされています。
 
-1.  Only Performance. Some stubs have alternative implementations in C++ code
-    which are used if there isn't an assembly stub. As compilers have gotten
-    better, it has become more reasonable to just use the C++ versions. Often
-    the biggest performance cost/win is due to fast paths being written that do
-    not require setting up a stack frame. Most of the casting helpers fall in
-    this category.
+1. 完全にアーキテクチャ固有のコンポーネント。これらはアーキテクチャ固有のフォルダに保持されます。
 
-    1.  `JIT_Stelem_Ref` – very slightly faster version of
-        `JIT_Stelem_Ref_Portable`.
+2. 特定のアーキテクチャでのみ有効な機能。例：`FEATURE_HFA`。
 
-2.  General purpose correctness. Some helpers adjust the abi of whatever they
-    call in interesting ways, manipulate/parse the "secret" arguments, or do
-    other not quite compilable to standardized C concepts.
+3. 特定のアーキテクチャに使用されるアドホックな `#if` ブロック。必要に応じて追加されます。一般的な目標はこれらを最小限に抑えることですが、ここでの難しさは主にプロセッサアーキテクチャがどのような特殊な動作を必要とするかによって決まります。
 
-    1.  `CallDescrWorkerInternal` – Needed to support VM to managed function
-        calls. Necessary for all applications as this is how the main method is
-        called.
+VM で CPU アーキテクチャを実装する方法の最新モデルとして、Arm64 がどのように実装されているかを見ることをお勧めします。
 
-    2.  `PInvokeImportThunk` – Needed to support saving off a set of arguments to
-        a p/invoke so that the runtime can find the actual target. Also uses one
-        of the secret arguments (Used by all p/invoke methods)
+### アーキテクチャ固有コンポーネント
 
-    3.  `PrecodeFixupThunk` – Needed to convert the secret argument from a
-        FixupPrecode\* to a MethodDesc\*. This function exists to reduce the
-        code size of FixupPrecodes as there are (Used by many managed methods)
+すべてのアーキテクチャが実装しなければならない、さまざまなアーキテクチャ固有のコンポーネントがあります。
 
-    4.  `ThePreStub` - Needed to support saving off a set of arguments to the
-        stack so that the runtime can find or jit the right target method.
-        (Needed for any jitted method to execute Used by all managed methods)
+1. アセンブリスタブ (Assembly Stubs)
 
-    5.  `ThePreStubPatch` – Exists to provide a reliable spot for the managed
-        debugger to put a breakpoint.
+2. `cgencpu.h`（CPU 固有のヘッダ。スタブやその他の CPU 固有の詳細を定義）
 
-    6.  GC Write Barriers – These are used to provide the GC with information
-        about what memory is being updated. The existing implementations of
-        these are all complex, and there are a number of controls where the
-        runtime can adjust to tweak the behavior of the barrier in various ways.
-        Some of these adjustments involve modifying the code to inject
-        constants, or even wholesale replacements of various bits and pieces. To
-        achieve high performance, all of these features must work; however, to
-        achieve bringup supporting a simple GC, focus on the case of the single
-        heap workstation GC. Additionally, the
-        FEATURE_MANUALLY_MANAGED_CARD_BUNDLES and
-        FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP can be implemented as
-        performance needs require.
+3. VSD コールスタブ生成 (virtualcallstubcpu.hpp および関連ロジック)
 
-    7.  `ComCallPreStub`/ `COMToCLRDispatchHelper` /`GenericComCallStub` - not
-        necessary for non-Windows platforms at this time
+4. プリコード/プレスタブ/ジャンプスタブの生成 (Precode/Prestub/Jumpstub generation)
 
-    8.  `TheUMEntryPrestub`/ `UMThunkStub` - used to enter the runtime from
-        non-managed code through entrypoints generated from the
-        Marshal.GetFunctionPointerForDelegate api.
+5. `callingconventions.h` / `argdestination.h` — VM コンポーネントが使用する ABI の実装を提供します。実装は長い一連の C プリプロセッサマクロを介してアーキテクチャ固有にされています。
 
-    9. `OnHijackTripThread` - needed for thread suspension to support GC + other
-        suspension requiring events. This is typically not needed for very early
-        stage bringup of the product, but will be needed for any decent size
-        application
+6. `gcinfodecoder.h` — GC 情報のフォーマットはアーキテクチャ固有です。これは、どの特定のレジスタが GC データを保持しているかについての情報を保持するためです。実装は一般的にレジスタ番号の観点で定義されるように簡略化されていますが、既存のアーキテクチャよりも多くのレジスタが使用可能なアーキテクチャの場合、フォーマットの拡張が必要になります。
 
-    10. `CallEHFunclet` – Used to call catch, finally and fault funclets. Behavior
-        is specific to exactly how funclets are implemented.
+#### アセンブリスタブ (Assembly Stubs)
 
-    11. `CallEHFilterFunclet` – Used to call filter funclets. Behavior is specific
-        to exactly how funclets are implemented.
+ランタイムがさまざまなアセンブリスタブを必要とする理由は多くあります。以下は、Unix 上の Arm64 向けに実装されたスタブの注釈付きリストです。
 
-    12. `ResolveWorkerChainLookupAsmStub`/ `ResolveWorkerAsmStub` Used for virtual
-        stub dispatch (virtual call support for interface, and some virtual
-        methods). These work in tandem with the logic in virtualcallstubcpu.h to
-        implement the logic described in [Virtual Stub Dispatch](./virtual-stub-dispatch)
+1. パフォーマンスのみ。一部のスタブには C++ コードでの代替実装があり、アセンブリスタブがない場合はそちらが使用されます。コンパイラが改善されるにつれて、C++ バージョンをそのまま使用することがより合理的になってきました。多くの場合、最大のパフォーマンスコスト/メリットは、スタックフレームを設定する必要がないファストパス (fast path) が書かれていることによるものです。キャスティングヘルパーのほとんどがこのカテゴリに該当します。
+   1. `JIT_Stelem_Ref` – `JIT_Stelem_Ref_Portable` のわずかに高速なバージョン。
 
-    13. `ProfileEnter`/ `ProfileLeave`/ `ProfileTailcall` – Used to call function
-        entry/exit profile functions acquired through the ICorProfiler
-        interface. Used in VERY rare circumstances. It is reasonable to wait to
-        implement these until the final stages of productization. Most profilers
-        do not use this functionality.
+2. 汎用的な正確性。一部のヘルパーは呼び出し先の ABI を興味深い方法で調整したり、「秘密の」引数を操作/解析したり、標準化された C の概念にコンパイルできない他の処理を行います。
+   1. `CallDescrWorkerInternal` – VM からマネージド関数への呼び出しをサポートするために必要です。main メソッドはこの方法で呼び出されるため、すべてのアプリケーションに必要です。
 
-    14. `JIT_PInvokeBegin`/`JIT_PInvokeEnd` – Leave/enter the managed runtime state. Necessary
-        for ReadyToRun pre-compiled pinvoke calls, so that they do not cause GC
-        starvation
+   2. `PInvokeImportThunk` – P/Invoke への引数のセットを保存して、ランタイムが実際のターゲットを見つけられるようにするために必要です。秘密の引数の1つも使用します（すべての P/Invoke メソッドで使用）。
 
-    15. `VarargPInvokeStub`/ `GenericPInvokeCalliHelper` Used to support calli
-        pinvokes. It is expected that C\# 8.0 will increase use of this feature.
-        Today use of this feature on Unix requires hand-written IL. On Windows
-        this feature is commonly used by C++/CLI
+   3. `PrecodeFixupThunk` – 秘密の引数を FixupPrecode\* から MethodDesc\* に変換するために必要です。この関数は FixupPrecode のコードサイズを削減するために存在します（多くのマネージドメソッドで使用）。
+
+   4. `ThePreStub` - ランタイムが正しいターゲットメソッドを見つけるか JIT コンパイルできるように、引数のセットをスタックに保存するために必要です。（JIT コンパイルされるメソッドの実行に必要。すべてのマネージドメソッドで使用）
+
+   5. `ThePreStubPatch` – マネージドデバッガがブレークポイントを設置するための信頼性の高いスポットを提供するために存在します。
+
+   6. GC ライトバリア (Write Barriers) – どのメモリが更新されているかについての情報を GC に提供するために使用されます。これらの既存の実装はすべて複雑で、ランタイムがバリアの動作をさまざまな方法で調整するための多くのコントロールがあります。これらの調整の一部は、定数を注入するためにコードを変更したり、さまざまな部分をまるごと置き換えたりすることを含みます。高いパフォーマンスを達成するためにはこれらすべての機能が動作する必要がありますが、シンプルな GC をサポートするブリングアップを達成するには、シングルヒープのワークステーション GC のケースに焦点を当ててください。さらに、`FEATURE_MANUALLY_MANAGED_CARD_BUNDLES` と `FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP` はパフォーマンスの必要性に応じて実装できます。
+
+   7. `ComCallPreStub` / `COMToCLRDispatchHelper` / `GenericComCallStub` - 現時点では Windows 以外のプラットフォームには不要です。
+
+   8. `TheUMEntryPrestub` / `UMThunkStub` - Marshal.GetFunctionPointerForDelegate API から生成されたエントリポイントを通じて、非マネージドコードからランタイムに入るために使用されます。
+
+   9. `OnHijackTripThread` - GC やその他の停止を必要とするイベントをサポートするためのスレッド停止 (thread suspension) に必要です。これは製品の非常に初期段階のブリングアップには通常必要ありませんが、ある程度のサイズのアプリケーションには必要です。
+
+   10. `CallEHFunclet` – catch、finally、fault のファンクレット (funclet) を呼び出すために使用されます。動作はファンクレットがどのように実装されているかに固有です。
+
+   11. `CallEHFilterFunclet` – フィルタファンクレット (filter funclet) を呼び出すために使用されます。動作はファンクレットがどのように実装されているかに固有です。
+
+   12. `ResolveWorkerChainLookupAsmStub` / `ResolveWorkerAsmStub` — 仮想スタブディスパッチ (virtual stub dispatch)（インターフェイスおよび一部の仮想メソッドの仮想呼び出しサポート）に使用されます。これらは virtualcallstubcpu.h のロジックと連動して、[仮想スタブディスパッチ](./virtual-stub-dispatch) で説明されているロジックを実装します。
+
+   13. `ProfileEnter` / `ProfileLeave` / `ProfileTailcall` – ICorProfiler インターフェイスを通じて取得された関数のエントリ/イグジットプロファイル関数を呼び出すために使用されます。非常にまれな状況で使用されます。これらの実装は製品化の最終段階まで待つのが合理的です。ほとんどのプロファイラーはこの機能を使用しません。
+
+   14. `JIT_PInvokeBegin` / `JIT_PInvokeEnd` – マネージドランタイム状態からの離脱/エントリ。ReadyToRun で事前コンパイルされた P/Invoke 呼び出しが GC スタベーション (starvation) を引き起こさないようにするために必要です。
+
+   15. `VarargPInvokeStub` / `GenericPInvokeCalliHelper` — calli P/Invoke をサポートするために使用されます。C# 8.0 でこの機能の使用が増加することが期待されます。現在、Unix でのこの機能の使用には手書きの IL が必要です。Windows ではこの機能は C++/CLI で一般的に使用されます。
+
+::: tip 💡 初心者向け補足
+「スタブ (stub)」とは、ある処理を別の処理に橋渡しするための小さなコード片のことです。Java でいうところのプロキシやアダプタに近い役割を果たします。たとえば、マネージドコード（C#）からネイティブコード（C/C++）を呼び出す際、引数の変換やレジスタの保存などを行うスタブが挿入されます。「ファンクレット (funclet)」は、例外処理のために分離された小さなコード片で、try-catch-finally の各ブロックに対応する独立した関数のようなものです。
+:::
 
 #### cgencpu.h
 
-This header is included by various code in the VM directory. It provides a large
-set of functionality that is architecture specific, including but not limited to
+このヘッダは VM ディレクトリのさまざまなコードからインクルードされます。アーキテクチャ固有の大きな機能セットを提供しており、以下を含みますが、これに限定されません。
 
-1.  Defines that are architecture specific specifying the sizes of various data
-    structures the VM should create, and such
+1. VM が作成すべきさまざまなデータ構造のサイズなどを指定する、アーキテクチャ固有の定義
 
-2.  Defines which specify which of various jit helpers should be replaced with
-    asm functions instead of the portable C++ implementations
+2. さまざまな JIT ヘルパーのうち、ポータブルな C++ 実装の代わりにアセンブリ関数に置き換えるべきものを指定する定義
 
-3.  The CalleeSavedRegisters, ArgumentRegisters, and FloatArgumentRegisters as
-    needed to describe the calling convention for the platform
+3. プラットフォームの呼び出し規約を記述するために必要な CalleeSavedRegisters、ArgumentRegisters、および FloatArgumentRegisters
 
-4.  The ClrFlushInstructionCache function. If the architecture doesn't actually
-    need to manually flush the icache, then this function is empty.
+4. ClrFlushInstructionCache 関数。アーキテクチャが実際に手動で命令キャッシュ (icache) をフラッシュする必要がない場合、この関数は空です。
 
-5.  Various functions for decoding and manipulating jump instructions. These are
-    used by various stub routines to predict where code will go, and to produce
-    simple jump stubs.
+5. ジャンプ命令のデコードと操作のためのさまざまな関数。これらはコードがどこに向かうかを予測したり、シンプルなジャンプスタブを生成するために、さまざまなスタブルーチンで使用されます。
 
-6.  The StubLinkerCpu class for the architecture. Each Architecture defines its
-    own StubLinkerCpu api surface and uses it to produce VM generated code.
-    There is a small set of apis that are called from general purpose vm code
-    (EmitComputedInstantiatingMethodStub, EmitShuffleThunkshared) across
-    multiple architectures, and then there are the individual assembly
-    instruction emission functions which are architecture specific. The
-    StubLinker is used to generate complex stubs, where the set of assembly
-    instructions emitted varies from stub to stub.
+6. アーキテクチャの StubLinkerCpu クラス。各アーキテクチャは独自の StubLinkerCpu API サーフェスを定義し、それを使用して VM が生成するコードを生成します。汎用 VM コード（EmitComputedInstantiatingMethodStub、EmitShuffleThunkshared）から複数のアーキテクチャにわたって呼び出される小さな API のセットがあり、さらにアーキテクチャ固有の個々のアセンブリ命令エミッション関数があります。StubLinker は、スタブごとにエミットされるアセンブリ命令のセットが異なる複雑なスタブを生成するために使用されます。
 
-7.  Various stub data structures. Many very simple stubs are not emitted via an
-    emission of a stream of bytes, but instead are exceptionally regular, and
-    are effectively the same instructions for each different stub, only with
-    slightly different data members. Instead of using the StubLinker mechanism,
-    the VM instead has structures that represent the entirety of the stub and
-    its associate data, and fill in the assembly instructions and data fields
-    with a normal constructor call setting magic numbers. In addition to being
-    executable, these stubs are often parsed to determine exactly what a given
-    function is, what it is doing, where control flow will lead to, etc.
+7. さまざまなスタブデータ構造。非常にシンプルなスタブの多くは、バイトストリームのエミッションでは生成されず、代わりに非常に規則的であり、実質的に各スタブで同じ命令で、わずかに異なるデータメンバーを持つだけです。StubLinker メカニズムを使用する代わりに、VM はスタブ全体と関連データを表す構造体を持ち、通常のコンストラクタ呼び出しでマジックナンバーを設定してアセンブリ命令とデータフィールドを埋めます。実行可能であることに加えて、これらのスタブは、ある関数が何であるか、何をしているか、制御フローがどこに向かうかなどを正確に判別するためにパースされることも多くあります。
 
 #### virtualcallstubcpu.h
 
-This header is used to provide implementation of various stubs as used by
-virtual stub dispatch. These stubs are the lookup, resolver, and dispatch stubs
-as described in [Virtual Stub Dispatch](./virtual-stub-dispatch). These are
-maintained in a separate file from the rest of cgencpu.h for historical reasons,
-and for reasons of size (there is quite a lot of logic here.)
+このヘッダは、仮想スタブディスパッチ (virtual stub dispatch) で使用されるさまざまなスタブの実装を提供するために使用されます。これらのスタブは、[仮想スタブディスパッチ](./virtual-stub-dispatch) で説明されているルックアップスタブ (lookup stub)、リゾルバスタブ (resolver stub)、およびディスパッチスタブ (dispatch stub) です。これらは歴史的な理由と、サイズの理由（ここにはかなり多くのロジックがあります）により、cgencpu.h の残りの部分とは別のファイルで管理されています。
 
-System.Private.CoreLib
-----------------------
+## System.Private.CoreLib
 
-### Initial Bring up
+### 初期ブリングアップ
 
-In System.Private.CoreLib there is no work necessary for initial bring up.
+System.Private.CoreLib では、初期ブリングアップに必要な作業はありません。
 
-### Complete support
+### 完全なサポート
 
-Complete support involves changing the publicly visible api surface of the
-product. Doing so is a process handled via public issues on GitHub and
-discussions with the api review board.
+完全なサポートには、製品の公開 API サーフェスの変更が含まれます。これは GitHub 上のパブリックイシューと API レビューボードとの議論を通じて処理されるプロセスです。
 
--   Adding support for the architecture to the
-    System.Reflection.ImageFileMachine enum, and
-    System.Reflection.ProcessorArchitecture enum as well as related logic
+- System.Reflection.ImageFileMachine enum および System.Reflection.ProcessorArchitecture enum、ならびに関連ロジックへのアーキテクチャサポートの追加
 
--   Adding support for architecture specific intrinsics such as SIMD
-    instructions, or other non-standard api surface.
+- SIMD 命令やその他の非標準 API サーフェスなど、アーキテクチャ固有のイントリンシック (intrinsics) のサポートの追加

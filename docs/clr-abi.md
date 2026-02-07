@@ -4,249 +4,287 @@
 この章の原文は [CLR ABI](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/clr-abi.md) です。
 :::
 
-This document describes the .NET Common Language Runtime (CLR) software conventions (or ABI, "Application Binary Interface"). It focuses on the ABI for the x64 (aka, AMD64), ARM (aka, ARM32 or Thumb-2), and ARM64 processor architectures. Documentation for the x86 ABI is somewhat scant, but information on the basics of the calling convention is included at the bottom of this document.
+本ドキュメントでは、.NET 共通言語ランタイム (Common Language Runtime, CLR) のソフトウェア規約 (ABI、「Application Binary Interface」) について説明します。x64 (AMD64)、ARM (ARM32 または Thumb-2)、および ARM64 プロセッサアーキテクチャの ABI に焦点を当てています。x86 の ABI に関するドキュメントはやや少ないですが、呼び出し規約 (calling convention) の基本に関する情報は本ドキュメントの末尾に含まれています。
 
-It describes requirements that the Just-In-Time (JIT) compiler imposes on the VM and vice-versa.
+::: tip 💡 初心者向け補足
+ABI (Application Binary Interface) とは、コンパイルされたプログラム同士が連携するための「契約」のようなものです。関数の呼び出し方、引数の渡し方、戻り値の受け取り方、レジスタの使い方、スタックメモリの管理方法などを定めたルールです。たとえば Java では JVM がこうした詳細を隠蔽しますが、CLR のような低レベルのランタイムでは、JIT コンパイラが生成するネイティブコードとランタイム (VM) の間でこれらの約束事を正確に守る必要があります。ABI が異なると、同じ CPU 上であっても関数を正しく呼び出すことができません。
+:::
 
-A note on the JIT codebases: JIT32 refers to the original JIT codebase that originally generated x86 code and was later ported to generate ARM code. JIT64 refers to the legacy .NET Framework codebase that supports AMD64. The RyuJIT compiler evolved from JIT32, and now supports all platforms and architectures. See [this post](https://devblogs.microsoft.com/dotnet/the-ryujit-transition-is-complete) for more RyuJIT history.
+本ドキュメントでは、JIT (Just-In-Time) コンパイラが VM に課す要件、およびその逆について説明します。
 
-NativeAOT refers to a runtime that is optimized for ahead-of-time compilation (AOT). The NativeAOT ABI differs in a few details for simplicity and consistency across platforms.
+JIT コードベースに関する補足: JIT32 は、もともと x86 コードを生成し、その後 ARM コード生成に移植されたオリジナルの JIT コードベースを指します。JIT64 は、AMD64 をサポートするレガシーな .NET Framework のコードベースを指します。RyuJIT コンパイラは JIT32 から発展し、現在はすべてのプラットフォームとアーキテクチャをサポートしています。RyuJIT の歴史の詳細については[こちらの記事](https://devblogs.microsoft.com/dotnet/the-ryujit-transition-is-complete)を参照してください。
 
-# Getting started
+NativeAOT は、事前コンパイル (AOT: Ahead-Of-Time compilation) に最適化されたランタイムを指します。NativeAOT の ABI は、プラットフォーム間での簡潔性と一貫性のために、いくつかの詳細が異なります。
 
-Read everything in the documented Windows and non-Windows ABI documentation. The CLR follows those basic conventions. This document only describes things that are CLR-specific, or exceptions from those documents.
+# はじめに
 
-## Windows ABI documentation
+Windows および非 Windows の ABI ドキュメントに記載されている内容をすべて読んでください。CLR はそれらの基本規約に従います。本ドキュメントでは、CLR 固有の事項、またはそれらのドキュメントからの例外のみを説明します。
 
-AMD64: See [x64 Software Conventions](https://learn.microsoft.com/cpp/build/x64-software-conventions).
+## Windows の ABI ドキュメント
 
-ARM: See [Overview of ARM32 ABI Conventions](https://learn.microsoft.com/cpp/build/overview-of-arm-abi-conventions).
+AMD64: [x64 Software Conventions](https://learn.microsoft.com/cpp/build/x64-software-conventions) を参照してください。
 
-ARM64: See [Overview of ARM64 ABI conventions](https://learn.microsoft.com/cpp/build/arm64-windows-abi-conventions).
+ARM: [Overview of ARM32 ABI Conventions](https://learn.microsoft.com/cpp/build/overview-of-arm-abi-conventions) を参照してください。
 
-## Non-Windows ABI documentation
+ARM64: [Overview of ARM64 ABI conventions](https://learn.microsoft.com/cpp/build/arm64-windows-abi-conventions) を参照してください。
 
-Arm corporation ABI documentation (for ARM32 and ARM64) is [here](https://developer.arm.com/architectures/system-architectures/software-standards/abi) and [here](https://github.com/ARM-software/abi-aa).
-Apple's ARM64 calling convention differences can be found [here](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms).
+## 非 Windows の ABI ドキュメント
 
-The Linux System V x86_64 ABI is documented in [System V Application Binary Interface / AMD64 Architecture Processor Supplement](https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf), with document source material [here](https://gitlab.com/x86-psABIs/x86-64-ABI).
+Arm 社の ABI ドキュメント (ARM32 および ARM64 向け) は[こちら](https://developer.arm.com/architectures/system-architectures/software-standards/abi)と[こちら](https://github.com/ARM-software/abi-aa)にあります。
+Apple の ARM64 呼び出し規約の差異については[こちら](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms)を参照してください。
 
-The LoongArch64 ABI documentation is [here](https://github.com/loongson/LoongArch-Documentation/blob/main/docs/LoongArch-ELF-ABI-EN.adoc)
+Linux System V x86_64 ABI は [System V Application Binary Interface / AMD64 Architecture Processor Supplement](https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf) に文書化されており、ドキュメントのソース資料は[こちら](https://gitlab.com/x86-psABIs/x86-64-ABI)にあります。
 
-The RISC-V ABIs Specification: [latest release](https://github.com/riscv-non-isa/riscv-elf-psabi-doc/releases/latest), [latest draft](https://github.com/riscv-non-isa/riscv-elf-psabi-doc/releases), [document source repo](https://github.com/riscv-non-isa/riscv-elf-psabi-doc).
+LoongArch64 の ABI ドキュメントは[こちら](https://github.com/loongson/LoongArch-Documentation/blob/main/docs/LoongArch-ELF-ABI-EN.adoc)にあります。
+
+RISC-V ABI 仕様: [最新リリース](https://github.com/riscv-non-isa/riscv-elf-psabi-doc/releases/latest)、[最新ドラフト](https://github.com/riscv-non-isa/riscv-elf-psabi-doc/releases)、[ドキュメントソースリポジトリ](https://github.com/riscv-non-isa/riscv-elf-psabi-doc)。
 
 Web Assembly Basic C ABI: [Basic C ABI](https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md)
 
-# General Unwind/Frame Layout
+# 一般的なアンワインド/フレームレイアウト
 
-For all non-x86 platforms, all methods must have unwind information so the garbage collector (GC) can unwind them (unlike native code in which a leaf method may be omitted).
+::: tip 💡 初心者向け補足
+「アンワインド (unwind)」とは、スタックフレーム (stack frame) を巻き戻す操作のことです。関数を呼び出すたびにスタック上に「フレーム」と呼ばれる領域が積み重なります。例外が発生したり、ガベージコレクション (GC) が実行されたりする際、ランタイムは現在のスタック状態を理解するためにフレームを一つずつ辿って戻る必要があります。この巻き戻し操作をアンワインドと呼びます。Java での例外発生時にスタックトレースが表示されるのと同様に、.NET ランタイムもスタックを正確にたどれる必要があります。
+:::
 
-ARM and ARM64: Managed methods must always push LR on the stack, and create a minimal frame, so that the method can be properly hijacked using return address hijacking.
+x86 以外のすべてのプラットフォームでは、ガベージコレクタ (GC) がアンワインドできるように、すべてのメソッドがアンワインド情報を持つ必要があります (ネイティブコードでは、リーフメソッドのアンワインド情報は省略可能です)。
 
-## Frame pointer chains
+ARM および ARM64: マネージドメソッドは、リターンアドレスハイジャック (return address hijacking) によってメソッドを適切にハイジャックできるように、常に LR をスタックにプッシュし、最小限のフレームを作成する必要があります。
 
-A frame pointer chain exists when the frame pointer register points to a location on the stack containing the address of the saved previous frame pointer value (from a caller of the current function). This chaining is required is certain scenarios, such as:
-1. gdb debugger stack walking on Linux.
-2. ETW event trace stack walking.
+## フレームポインタチェーン (Frame pointer chains)
 
-There are two considerations:
-1. Reserving the frame pointer register for stack walking, and not using it for other purposes, such as general-purpose code generation, and
-2. Creating a frame chain.
+フレームポインタチェーン (frame pointer chain) とは、フレームポインタレジスタ (frame pointer register) がスタック上の位置を指し、その位置に保存された前のフレームポインタ値 (現在の関数の呼び出し元のもの) のアドレスが格納されている状態を指します。このチェーンは、以下のような特定のシナリオで必要です：
 
-Note that even if a function is not added to the frame chain, as long as the function does not modify the frame pointer, the existing frame chain is still viable, although that function will not appear when walking the chain. The JIT may have reasons to create and use a frame pointer register even if a frame chain is not created, such as to access main function local variables within an exception handling funclet.
+1. Linux 上の gdb デバッガによるスタックウォーキング。
+2. ETW イベントトレースによるスタックウォーキング。
 
-The frame pointer register is, for each architecture: ARM: r11, ARM64: x29, x86: EBP, x64: RBP.
+考慮すべき点が 2 つあります：
 
-The JIT creates frame chains most of the time for all platforms _except_ Windows x64. Very simple functions may not get added to the frame chain, with the intent to improve performance by reducing frame setup cost (the heuristics for this choice are in `Compiler::rpMustCreateEBPFrame()`). For Windows x64, unwinding will always be done using the generated unwind codes, and not simple frame chain traversal.
+1. フレームポインタレジスタをスタックウォーキング用に予約し、汎用的なコード生成など他の目的に使用しないこと。
+2. フレームチェーンを作成すること。
 
-Some additional links:
-- See [ARM64 JIT frame layout](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/jit/arm64-jit-frame-layout.md) for documentation on that architecture's frame design.
-- The CoreCLR change to always create RBP chains on Unix x64 is [here](https://github.com/dotnet/coreclr/pull/4019) (issue with discussion [here](https://github.com/dotnet/runtime/issues/4651)).
+関数がフレームチェーンに追加されていなくても、その関数がフレームポインタを変更しない限り、既存のフレームチェーンは引き続き有効です。ただし、チェーンをたどる際にその関数は表示されません。JIT は、フレームチェーンが作成されていなくても、例外処理ファンクレット (funclet) 内からメインの関数ローカル変数にアクセスするためなどの理由で、フレームポインタレジスタを作成・使用する場合があります。
 
-# Special/extra parameters
+フレームポインタレジスタは、各アーキテクチャで以下のとおりです: ARM: r11、ARM64: x29、x86: EBP、x64: RBP。
 
-## The `this` pointer
+JIT は、Windows x64 _以外_ のすべてのプラットフォームでほとんどの場合フレームチェーンを作成します。非常に単純な関数は、フレームセットアップコストを削減してパフォーマンスを向上させる目的で、フレームチェーンに追加されない場合があります (この選択のヒューリスティクスは `Compiler::rpMustCreateEBPFrame()` にあります)。Windows x64 では、アンワインドは常に生成されたアンワインドコードを使用して行われ、単純なフレームチェーンのトラバーサルは使用されません。
 
-The managed `this` pointer is treated like a new kind of argument not covered by the native ABI, so we chose to always pass it as the first argument in (AMD64) `RCX` or (ARM, ARM64) `R0`.
+追加リンク:
 
-AMD64-only: Up to .NET Framework 4.5, the managed `this` pointer was treated just like the native `this` pointer (meaning it was the second argument when the call used a return buffer and was passed in RDX instead of RCX). Starting with .NET Framework 4.5, it is always the first argument.
+- ARM64 のフレーム設計に関するドキュメントは [ARM64 JIT frame layout](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/jit/arm64-jit-frame-layout.md) を参照してください。
+- Unix x64 で常に RBP チェーンを作成するようにした CoreCLR の変更は[こちら](https://github.com/dotnet/coreclr/pull/4019)です (議論を含む Issue は[こちら](https://github.com/dotnet/runtime/issues/4651))。
 
-## Varargs
+# 特殊パラメータ/追加パラメータ
 
-Varargs refers to passing or receiving a variable number of arguments for a call.
+::: tip 💡 初心者向け補足
+呼び出し規約 (calling convention) とは、関数がどのように引数を受け取り、戻り値を返すかを定義するルールのことです。たとえば、「最初の引数はレジスタ RCX に入れる」「戻り値は RAX に入れる」といったルールです。CLR はネイティブ（OS やハードウェアが定める）ABI の規約に加えて、ガベージコレクション (GC) やジェネリクスなどをサポートするために、いくつかの **特殊なパラメータ** を追加しています。この章では、そうした CLR 独自の追加パラメータについて説明します。
+:::
 
-C# varargs, using the `params` keyword, are at the IL level just normal calls with a fixed number of parameters.
+## `this` ポインタ
 
-Managed varargs (using C#'s pseudo-documented "...", `__arglist`, etc.) are implemented almost exactly like C++ varargs. The biggest difference is that the JIT adds a "vararg cookie" after the optional return buffer and the optional `this` pointer, but before any other user arguments. The callee must spill this cookie and all subsequent arguments into their home location, as they may be addressed via pointer arithmetic starting with the cookie as a base. The cookie happens to be to a pointer to a signature that the runtime can parse to (1) report any GC pointers within the variable portion of the arguments or (2) type-check (and properly walk over) any arguments extracted via ArgIterator. This is marked by `IMAGE_CEE_CS_CALLCONV_VARARG`, which should not be confused with `IMAGE_CEE_CS_CALLCONV_NATIVEVARARG`, which really is exactly native varargs (no cookie) and should only appear in PInvoke IL stubs, which properly handle pinning and other GC magic.
+マネージド `this` ポインタは、ネイティブ ABI ではカバーされない新しい種類の引数として扱われます。そのため、常に最初の引数として (AMD64) `RCX` または (ARM, ARM64) `R0` で渡すことにしています。
 
-On AMD64, just like native, any floating point arguments passed in floating point registers (including the fixed arguments) will be shadowed (i.e. duplicated) in the integer registers.
+AMD64 のみ：.NET Framework 4.5 までは、マネージド `this` ポインタはネイティブの `this` ポインタと同じように扱われていました（つまり、呼び出しがリターンバッファ (return buffer) を使用する場合は第 2 引数となり、RCX ではなく RDX で渡されていました）。.NET Framework 4.5 以降は、常に最初の引数として渡されます。
 
-On ARM and ARM64, just like native, nothing is put in the floating point registers.
+## 可変長引数 (Varargs)
 
-However, unlike native varargs, all floating point arguments are not promoted to double (`R8`), and instead retain their original type (`R4` or `R8`) (although this does not preclude an IL generator like managed C++ from explicitly injecting an upcast at the call-site and adjusting the call-site-sig appropriately). This leads to unexpected behavior when native C++ is ported to C# or even just managed via the different flavors of managed C++.
+可変長引数 (Varargs) とは、関数呼び出しにおいて可変個の引数を渡したり受け取ったりすることを指します。
 
-Managed varargs are supported on Windows only.
+::: tip 💡 初心者向け補足
+可変長引数 (varargs) とは、関数に渡す引数の数が固定されていない仕組みのことです。C 言語の `printf` 関数のように、呼び出すたびに異なる数の引数を渡せます。C# では `params` キーワードを使った可変長引数がよく使われますが、これは内部的には固定長の引数と同じ扱いです。一方、ここで説明するマネージド可変長引数 (`__arglist` など) は、よりローレベルな仕組みで、C++ の可変長引数に近い動作をします。
+:::
 
-Managed/native varargs are supported on Windows only. Support for managed/native varargs on non-Windows platforms is tracked by [this issue](https://github.com/dotnet/runtime/issues/82081).
+C# の可変長引数は `params` キーワードを使用しますが、IL レベルでは固定数のパラメータを持つ通常の呼び出しにすぎません。
 
-## Generics
+マネージド可変長引数（C# の疑似ドキュメント化された `...`、`__arglist` などを使用）は、C++ の可変長引数とほぼ同じように実装されています。最大の違いは、JIT がオプションのリターンバッファとオプションの `this` ポインタの後、かつ他のユーザー引数の前に「vararg クッキー (vararg cookie)」を追加することです。呼び出し先 (callee) は、このクッキーとそれ以降のすべての引数をホームロケーション (home location) にスピル (spill) しなければなりません。これらはクッキーをベースとしたポインタ演算でアドレスされる可能性があるためです。このクッキーは、ランタイムがパースできるシグネチャへのポインタであり、(1) 引数の可変部分に含まれる GC ポインタを報告する、または (2) ArgIterator を通じて取り出された引数の型チェック（および適切なウォークオーバー）を行うために使用されます。これは `IMAGE_CEE_CS_CALLCONV_VARARG` で示されますが、`IMAGE_CEE_CS_CALLCONV_NATIVEVARARG` と混同しないでください。後者はまさにネイティブの可変長引数そのもの（クッキーなし）であり、PInvoke IL スタブでのみ使用されるべきもので、ピン留め (pinning) やその他の GC マジック (GC magic) を適切に処理します。
 
-*Shared generics*. In cases where the code address does not uniquely identify a generic instantiation of a method, then a 'generic instantiation parameter' is required. Often the `this` pointer can serve dual-purpose as the instantiation parameter. When the `this` pointer is not the generic parameter, the generic parameter is passed as an additional argument. On ARM and AMD64, it is passed after the optional return buffer and the optional `this` pointer, but before any user arguments. On ARM64 and RISC-V, the generic parameter is passed after the optional `this` pointer, but before any user arguments. On x86, if all arguments of the function including `this` pointer fit into argument registers (ECX and EDX) and we still have argument registers available, we store the hidden argument in the next available argument register. Otherwise it is passed as the last stack argument. For generic methods (where there is a type parameter directly on the method, as compared to the type), the generic parameter currently is a MethodDesc pointer (I believe an InstantiatedMethodDesc). For static methods (where there is no `this` pointer) the generic parameter is a MethodTable pointer/TypeHandle.
+AMD64 では、ネイティブと同様に、浮動小数点レジスタで渡される浮動小数点引数（固定引数を含む）は、整数レジスタにシャドウ（つまり複製）されます。
 
-Sometimes the VM asks the JIT to report and keep alive the generics parameter. In this case, it must be saved on the stack someplace and kept alive via normal GC reporting (if it was the `this` pointer, as compared to a MethodDesc or MethodTable) for the entire method except the prolog and epilog. Also note that the code to home it, must be in the range of code reported as the prolog in the GC info (which probably isn't the same as the range of code reported as the prolog in the unwind info).
+ARM および ARM64 では、ネイティブと同様に、浮動小数点レジスタには何も配置されません。
 
-There is no defined/enforced/declared ordering between the generic parameter and the varargs cookie because the runtime does not support that combination. There are chunks of code in the VM and JITs that would appear to support that, but other places assert and disallow it, so nothing is tested, and I would assume there are bugs and differences (i.e. one JIT using a different ordering than the other JIT or the VM).
+ただし、ネイティブの可変長引数とは異なり、すべての浮動小数点引数が double (`R8`) に昇格されるわけではなく、元の型 (`R4` または `R8`) が維持されます（ただし、managed C++ のような IL ジェネレータが呼び出し元でアップキャストを明示的に挿入し、呼び出し元のシグネチャを適切に調整することを妨げるものではありません）。これにより、ネイティブ C++ を C# に移植したり、managed C++ のさまざまなバリアントで管理したりする場合に、予期しない動作が生じることがあります。
 
-### Example
+マネージド可変長引数は Windows でのみサポートされています。
+
+マネージド/ネイティブ可変長引数は Windows でのみサポートされています。非 Windows プラットフォームでのマネージド/ネイティブ可変長引数のサポートは [この Issue](https://github.com/dotnet/runtime/issues/82081) で追跡されています。
+
+## ジェネリクス (Generics)
+
+_共有ジェネリクス (Shared generics)_。コードアドレスがメソッドのジェネリックインスタンス化 (generic instantiation) を一意に識別できない場合、「ジェネリックインスタンス化パラメータ (generic instantiation parameter)」が必要になります。多くの場合、`this` ポインタがインスタンス化パラメータとしても兼用できます。`this` ポインタがジェネリックパラメータでない場合、ジェネリックパラメータは追加の引数として渡されます。ARM と AMD64 では、オプションのリターンバッファとオプションの `this` ポインタの後、かつユーザー引数の前に渡されます。ARM64 と RISC-V では、ジェネリックパラメータはオプションの `this` ポインタの後、かつユーザー引数の前に渡されます。x86 では、`this` ポインタを含むすべての関数の引数が引数レジスタ (ECX と EDX) に収まり、かつまだ使用可能な引数レジスタがある場合、隠し引数は次に使用可能な引数レジスタに格納されます。それ以外の場合は、最後のスタック引数として渡されます。ジェネリックメソッド（型ではなくメソッド自体に型パラメータがある場合）では、ジェネリックパラメータは現在 MethodDesc ポインタ（おそらく InstantiatedMethodDesc）です。静的メソッド（`this` ポインタがない場合）では、ジェネリックパラメータは MethodTable ポインタ/TypeHandle です。
+
+::: tip 💡 初心者向け補足
+共有ジェネリクスとは、`List<int>` と `List<string>` のように異なる型引数で使われるジェネリック型やメソッドが、可能な場合には同じコンパイル済みコードを共有する最適化のことです。しかし、共有コードは実行時にどの型引数で呼ばれているかを知る必要があるため、「ジェネリックインスタンス化パラメータ」という隠しパラメータを追加で渡します。たとえば、インスタンスメソッドの場合は `this` ポインタから型情報を取得できますが、静的メソッドでは `this` がないため、MethodTable へのポインタを別途渡す必要があります。
+:::
+
+VM が JIT にジェネリクスパラメータの報告と存続を要求する場合があります。この場合、パラメータはスタック上のどこかに保存し、プロローグ (prolog) とエピローグ (epilog) を除くメソッド全体にわたって通常の GC 報告で存続させなければなりません（MethodDesc や MethodTable ではなく `this` ポインタだった場合）。また、パラメータをホームに配置するコードは、GC 情報でプロローグとして報告されるコード範囲内になければなりません（これはアンワインド情報 (unwind info) でプロローグとして報告される範囲とは異なる可能性があります）。
+
+ジェネリックパラメータと可変長引数クッキーの間に定義された/強制された/宣言された順序はありません。ランタイムがその組み合わせをサポートしていないためです。VM と JIT の中にはその組み合わせをサポートしているように見えるコードがいくつかありますが、別の場所ではアサートして禁止しているため、何もテストされておらず、バグや相違（たとえば、ある JIT が別の JIT や VM とは異なる順序を使用している、など）があるものと推測されます。
+
+### 例
+
 ```
 call(["this" pointer] [return buffer pointer] [generics context|varargs cookie] [userargs]*)
 ```
 
-## Async
+## 非同期 (Async)
 
-Async calling convention is additive to other calling conventions when supported. The set of scenarios is constrained to regular static/virtual calls and does not, for example, support PInvokes or varargs. At the minimum ordinary static calls, calls with `this` parameter or generic hidden parameters are supported.
+非同期呼び出し規約 (Async calling convention) は、サポートされている場合に他の呼び出し規約に対して追加的に適用されます。対象となるシナリオは通常の静的/仮想呼び出しに限定されており、たとえば PInvoke や可変長引数はサポートしません。最低限、通常の静的呼び出し、`this` パラメータ付きの呼び出し、ジェネリック隠しパラメータ付きの呼び出しがサポートされます。
 
-Async calling convention adds an extra `Continuation` parameter and an extra return, which sematically takes precedence when not `null`. A non-null `Continuation` upon return signals that the computation is not complete and the formal result is not ready. A non-null argument means that the function is resuming and should extract the state from the `Continuation` and continue execution (while ignoring all other arguments).
+非同期呼び出し規約は、追加の `Continuation` パラメータと追加の戻り値を加えます。この戻り値は `null` でない場合に意味的に優先されます。戻り時に `Continuation` が非 `null` であることは、計算がまだ完了しておらず正式な結果が準備できていないことを示します。引数として非 `null` が渡されることは、関数が再開中であり、`Continuation` から状態を復元して（他のすべての引数を無視して）実行を継続すべきであることを意味します。
 
-The `Continuation` is a managed object and needs to be tracked accordingly. The GC info includes the continuation result as live at Async call sites.
+`Continuation` はマネージドオブジェクトであり、それに応じて追跡する必要があります。GC 情報には、非同期呼び出しサイトにおいて継続結果がライブとして含まれます。
 
-### Returning `Continuation`
-To return `Continuation` we use a volatile/calee-trash register that cannot be used to return the actual result.
+### `Continuation` の返却
 
-| arch | `REG_ASYNC_CONTINUATION_RET` |
-| ------------- | ------------- |
-| x86  | ecx  |
-| x64  | rcx  |
-| arm | r2  |
-| arm64  | x2  |
-| risc-v  | a2  |
+`Continuation` を返すには、実際の結果を返すために使用できない volatile/callee-trash レジスタを使用します。
 
-### Passing `Continuation` argument
-The `Continuation` parameter is passed at the same position as generic instantiation parameter or immediately after, if both present. For x86 the argument order is reversed.
+| アーキテクチャ | `REG_ASYNC_CONTINUATION_RET` |
+| -------------- | ---------------------------- |
+| x86            | ecx                          |
+| x64            | rcx                          |
+| arm            | r2                           |
+| arm64          | x2                           |
+| risc-v         | a2                           |
+
+### `Continuation` 引数の受け渡し
+
+`Continuation` パラメータは、ジェネリックインスタンス化パラメータと同じ位置、または両方が存在する場合はその直後に渡されます。x86 では引数の順序が逆になります。
 
 ```
-call(["this" pointer] [return buffer pointer] [generics context] [continuation] [userargs])   // not x86
+call(["this" pointer] [return buffer pointer] [generics context] [continuation] [userargs])   // x86 以外
 
 call(["this" pointer] [return buffer pointer] [userargs] [continuation] [generics context])   // x86
 ```
 
-## AMD64-only: by-value value types
+## AMD64 のみ：値渡しの値型
 
-Just like native, AMD64 has implicit-byrefs. Any structure (value type in IL parlance) that is not 1, 2, 4, or 8 bytes in size (i.e., 3, 5, 6, 7, or >= 9 bytes in size) that is declared to be passed by value, is instead passed by reference. For JIT generated code, it follows the native ABI where the passed-in reference is a pointer to a compiler generated temp local on the stack. However, there are some cases within remoting or reflection where apparently stackalloc is too hard, and so they pass in pointers within the GC heap, thus the JITed code must report these implicit byref parameters as interior pointers (BYREFs in JIT parlance), in case the callee is one of these reflection paths. Similarly, all writes must use checked write barriers.
+ネイティブと同様に、AMD64 には暗黙的な参照渡し (implicit-byrefs) があります。サイズが 1、2、4、8 バイトでない（つまり 3、5、6、7、または 9 バイト以上の）構造体（IL 用語では値型 (value type)）が値渡しで宣言されている場合、代わりに参照渡しされます。JIT が生成するコードの場合は、ネイティブ ABI に従い、渡される参照はスタック上のコンパイラが生成した一時ローカルへのポインタです。ただし、リモーティングやリフレクション内で stackalloc が困難すぎるケースがあり、GC ヒープ内のポインタを渡す場合があります。そのため、JIT されたコードは、呼び出し先がこれらのリフレクションパスのいずれかである場合に備えて、暗黙的な byref パラメータをインテリアポインタ (interior pointer)（JIT 用語では BYREF）として報告しなければなりません。同様に、すべての書き込みにはチェック付きライトバリア (checked write barrier) を使用する必要があります。
 
-The AMD64 native calling conventions (Windows 64 and System V) require return buffer address to be returned by callee in RAX. JIT also follows this rule.
+AMD64 のネイティブ呼び出し規約（Windows 64 および System V）では、リターンバッファのアドレスを呼び出し先 (callee) が RAX で返すことを要求しています。JIT もこのルールに従います。
 
-## RISC-V only: structs passed/returned according to hardware floating-point calling convention
+## RISC-V のみ：ハードウェア浮動小数点呼び出し規約に従った構造体の受け渡し/返却
 
-Passing/returning structs according to hardware floating-point calling convention like native is currently [supported only up to 16 bytes](https://github.com/dotnet/runtime/issues/107386), ones larger than that differ from the standard ABI and are passed/returned according to integer calling convention (by implicit reference).
+ネイティブと同様のハードウェア浮動小数点呼び出し規約に従った構造体の受け渡し/返却は、現在 [16 バイトまでのみサポート](https://github.com/dotnet/runtime/issues/107386)されています。それより大きい構造体は標準 ABI と異なり、整数呼び出し規約（暗黙的な参照渡し）に従って受け渡し/返却されます。
 
-## Return buffers
+## リターンバッファ (Return buffers)
 
-Since .NET 10, return buffers must always be allocated on the stack by the caller. After the call, the caller is responsible for copying the return buffer to the final destination using write barriers if necessary. The JIT can assume that the return buffer is always on the stack and may optimize accordingly, such as by omitting write barriers when writing GC pointers to the return buffer. In addition, the buffer is allowed to be used for temporary storage within the method since its content must not be aliased or cross-thread visible.
+.NET 10 以降、リターンバッファは常に呼び出し元 (caller) がスタック上に確保する必要があります。呼び出しの後、呼び出し元は必要に応じてライトバリア (write barrier) を使用してリターンバッファを最終的な送り先にコピーする責任があります。JIT はリターンバッファが常にスタック上にあると想定でき、GC ポインタをリターンバッファに書き込む際のライトバリアの省略など、それに応じた最適化を行えます。さらに、バッファの内容はエイリアスされたりクロススレッドから可視であったりしてはならないため、メソッド内での一時ストレージとしての使用が許可されています。
 
-ARM64-only: When a method returns a structure that is larger than 16 bytes the caller reserves a return buffer of sufficient size and alignment to hold the result. The address of the buffer is passed as an argument to the method in `R8` (defined in the JIT as `REG_ARG_RET_BUFF`). The callee isn't required to preserve the value stored in `R8`.
+ARM64 のみ：メソッドが 16 バイトより大きい構造体を返す場合、呼び出し元は結果を保持するのに十分なサイズとアラインメントを持つリターンバッファを確保します。バッファのアドレスは `R8`（JIT では `REG_ARG_RET_BUFF` として定義）でメソッドの引数として渡されます。呼び出し先は `R8` に格納された値を保持する必要はありません。
 
-## Hidden parameters
+## 隠しパラメータ (Hidden parameters)
 
-*Stub dispatch* - when a virtual call uses a VSD stub, rather than back-patching the calling code (or disassembling it), the JIT must place the address of the stub used to load the call target, the "stub indirection cell", in (x86) `EAX` / (AMD64) `R11` / (ARM) `R4` / (ARM NativeAOT ABI) `R12` / (ARM64) `R11`. In the JIT, this is encapsulated in the `VirtualStubParamInfo` class.
+_スタブディスパッチ (Stub dispatch)_ - 仮想呼び出しが VSD スタブを使用する場合、呼び出しコードをバックパッチ（または逆アセンブル）する代わりに、JIT は呼び出しターゲットをロードするために使用されるスタブのアドレス、すなわち「スタブ間接セル (stub indirection cell)」を (x86) `EAX` / (AMD64) `R11` / (ARM) `R4` / (ARM NativeAOT ABI) `R12` / (ARM64) `R11` に配置しなければなりません。JIT では、これは `VirtualStubParamInfo` クラスにカプセル化されています。
 
-*Calli Pinvoke* - The VM wants the address of the PInvoke in (AMD64) `R10` / (ARM) `R12` / (ARM64) `R14` (In the JIT: `REG_PINVOKE_TARGET_PARAM`), and the signature (the pinvoke cookie) in (AMD64) `R11` / (ARM) `R4` / (ARM64) `R15` (in the JIT: `REG_PINVOKE_COOKIE_PARAM`).
+_Calli PInvoke_ - VM は PInvoke のアドレスを (AMD64) `R10` / (ARM) `R12` / (ARM64) `R14`（JIT では `REG_PINVOKE_TARGET_PARAM`）に、シグネチャ（PInvoke クッキー）を (AMD64) `R11` / (ARM) `R4` / (ARM64) `R15`（JIT では `REG_PINVOKE_COOKIE_PARAM`）に必要とします。
 
-*Normal PInvoke* - The VM shares IL stubs based on signatures, but wants the right method to show up in call stack and exceptions, so the MethodDesc for the exact PInvoke is passed in the (x86) `EAX` / (AMD64) `R10` / (ARM, ARM64) `R12` (in the JIT: `REG_SECRET_STUB_PARAM`). Then in the IL stub, when the JIT gets `CORJIT_FLG_PUBLISH_SECRET_PARAM`, it must move the register into a compiler temp. The value is returned for the intrinsic `NI_System_StubHelpers_GetStubContext`.
+_通常の PInvoke_ - VM はシグネチャに基づいて IL スタブを共有しますが、コールスタックと例外に正しいメソッドを表示させたいため、正確な PInvoke の MethodDesc が (x86) `EAX` / (AMD64) `R10` / (ARM, ARM64) `R12`（JIT では `REG_SECRET_STUB_PARAM`）で渡されます。その後、IL スタブ内で JIT が `CORJIT_FLG_PUBLISH_SECRET_PARAM` を受け取ると、レジスタをコンパイラの一時変数に移動しなければなりません。この値はイントリンシック (intrinsic) `NI_System_StubHelpers_GetStubContext` で返されます。
 
-## Small primitive returns
+## 小さなプリミティブ型の戻り値
 
-Primitive value types smaller than 32-bits are widened to 32-bits: signed small types are sign extended and unsigned small types are zero extended. This can be different from the standard calling conventions that may leave the state of unused bits in the return register undefined.
+32 ビット未満のプリミティブ値型は 32 ビットに拡張されます。符号付き小型は符号拡張 (sign extend) され、符号なし小型はゼロ拡張 (zero extend) されます。これは、リターンレジスタの未使用ビットの状態を未定義のままにする標準呼び出し規約とは異なる場合があります。
 
-## Small primitive arguments
+## 小さなプリミティブ型の引数
 
-Small primitive arguments have undefined upper bits. This can be different from the standard calling conventions that may require normalization (e.g. on ARM32 and Apple ARM64).
+小さなプリミティブ型の引数は、上位ビットが未定義です。これは、正規化 (normalization) を要求する標準呼び出し規約（例：ARM32 や Apple ARM64）とは異なる場合があります。
 
-On RISC-V small primitive arguments are extended according to standard calling conventions.
+RISC-V では、小さなプリミティブ型の引数は標準呼び出し規約に従って拡張されます。
 
-# PInvokes
+# PInvoke
 
-The convention is that any method with an InlinedCallFrame (either an IL stub or a normal method with an inlined PInvoke) saves/restores all non-volatile integer registers in its prolog/epilog respectively. This is done so that the InlinedCallFrame can just contain a return address, a stack pointer and a frame pointer. Then using just those three it can start a full stack walk using the normal RtlVirtualUnwind.
+::: tip 💡 初心者向け補足
+PInvoke (Platform Invoke) とは、マネージド .NET コードからネイティブ（アンマネージド）コード（C/C++ の DLL など）を呼び出すための仕組みです。Java における JNI (Java Native Interface) に相当するものです。PInvoke を使うと、OS の API やサードパーティのネイティブライブラリをマネージドコードから直接呼び出すことができます。
+:::
 
-When encountering a PInvoke, the JIT will query the VM if the GC transition should be suppressed. Suppression of the GC transition is indicated by the addition of an attribute on the PInvoke definition. If the VM indicates the GC transition is to be suppressed, the PInvoke frame will be omitted in either the IL stub or inlined scenario and a GC Poll will be inserted near the unmanaged call site. If an enclosing function contains more than one inlined PInvoke but not all have requested a suppression of the GC transition a PInvoke frame will still be constructed for the other inlined PInvokes.
+規約として、InlinedCallFrame を持つメソッド（IL スタブまたはインライン PInvoke を含む通常のメソッド）は、プロローグ/エピローグでそれぞれすべての不揮発性 (non-volatile) 整数レジスタの保存/復元を行います。これにより、InlinedCallFrame にはリターンアドレス、スタックポインタ、フレームポインタだけを格納すればよくなります。そしてこれら3つの値だけを使って、通常の RtlVirtualUnwind によるフルスタックウォークを開始できます。
 
-For AMD64, a method with an InlinedCallFrame must use RBP as the frame register.
+JIT は PInvoke に遭遇すると、GC 遷移 (GC transition) を抑制すべきかどうかを VM に問い合わせます。GC 遷移の抑制は、PInvoke 定義に属性を追加することで示されます。VM が GC 遷移を抑制すべきと指示した場合、IL スタブまたはインラインのどちらのシナリオでも PInvoke フレームは省略され、アンマネージド呼び出しサイトの近くに GC ポール (GC Poll) が挿入されます。囲んでいる関数に複数のインライン PInvoke が含まれていても、すべてが GC 遷移の抑制を要求しているわけではない場合、他のインライン PInvoke に対しては引き続き PInvoke フレームが構築されます。
 
-For ARM and ARM64, we will also always use a frame pointer (R11). That is partially due to the frame chaining requirement. However, the VM also requires it for PInvokes with InlinedCallFrames.
+AMD64 では、InlinedCallFrame を持つメソッドはフレームレジスタとして RBP を使用しなければなりません。
 
-For ARM, the VM also has a dependency on `REG_SAVED_LOCALLOC_SP`.
+ARM および ARM64 では、常にフレームポインタ (R11) を使用します。これは部分的にはフレームチェーンの要件によるものですが、VM も InlinedCallFrame を持つ PInvoke に対してこれを要求しています。
 
-All these dependencies show up in the implementation of `InlinedCallFrame::UpdateRegDisplay`.
+ARM では、VM は `REG_SAVED_LOCALLOC_SP` にも依存しています。
 
-JIT32 only generates one epilog (and causes all returns to branch to it) when there are PInvokes/InlinedCallFrame in the current method.
+これらの依存関係はすべて `InlinedCallFrame::UpdateRegDisplay` の実装に現れています。
 
-## Per-frame PInvoke initialization
+JIT32 は、現在のメソッドに PInvoke/InlinedCallFrame がある場合、エピローグを1つだけ生成し（すべての return をそこへ分岐させ）ます。
 
-The InlinedCallFrame is initialized once at the head of IL stubs and once in each path that does an inlined PInvoke.
+## フレームごとの PInvoke 初期化
 
-In JIT64 this happens in blocks that actually contain calls, but pushing it out of loops that have landing pads, and then looking for dominator blocks. For IL stubs and methods with EH, we give up and place the initialization in the first block.
+InlinedCallFrame は、IL スタブの先頭で1回、およびインライン PInvoke を行う各パスで1回初期化されます。
 
-In RyuJIT/JIT32 (ARM), all methods are treated like JIT64's IL stubs (meaning the per-frame initialization happens once just after the prolog).
+JIT64 では、実際に呼び出しを含むブロックで初期化が行われますが、ランディングパッドを持つループの外に押し出し、その後ドミネーターブロックを探します。IL スタブおよび EH を持つメソッドの場合は、諦めて最初のブロックに初期化を配置します。
 
-The JIT generates a call to `CORINFO_HELP_INIT_PINVOKE_FRAME` passing the address of the InlinedCallFrame and either NULL or the secret parameter for IL stubs. `JIT_InitPInvokeFrame` initializes the InlinedCallFrame and sets it to point to the current Frame chain top. Then it returns the current thread's native Thread object.
+RyuJIT/JIT32 (ARM) では、すべてのメソッドが JIT64 の IL スタブと同様に扱われます（つまり、フレームごとの初期化はプロローグの直後に1回だけ行われます）。
 
-On AMD64, the JIT generates code to save RSP and RBP into the InlinedCallFrame.
+JIT は、InlinedCallFrame のアドレスと、NULL または IL スタブ用のシークレットパラメータを渡して `CORINFO_HELP_INIT_PINVOKE_FRAME` を呼び出すコードを生成します。`JIT_InitPInvokeFrame` は InlinedCallFrame を初期化し、現在の Frame チェーンの先頭を指すように設定します。そして、現在のスレッドのネイティブ Thread オブジェクトを返します。
 
-For IL stubs only, the per-frame initialization includes setting `Thread->m_pFrame` to the InlinedCallFrame (effectively 'pushing' the Frame).
+AMD64 では、JIT は RSP と RBP を InlinedCallFrame に保存するコードを生成します。
 
-## Per-call-site PInvoke work
+IL スタブの場合のみ、フレームごとの初期化には `Thread->m_pFrame` を InlinedCallFrame に設定すること（事実上 Frame を「プッシュ」すること）が含まれます。
 
-The below is performed when the GC transition is not suppressed.
+## 呼び出しサイトごとの PInvoke 作業
 
-1. For direct calls, the JITed code sets `InlinedCallFrame->m_pDatum` to the MethodDesc of the call target.
-    * For JIT64, indirect calls within IL stubs sets it to the secret parameter (this seems redundant, but it might have changed since the per-frame initialization?).
-    * For JIT32 (ARM) indirect calls, it sets this member to the size of the pushed arguments, according to the comments. The implementation however always passed 0.
-2. For JIT64/AMD64 only: Next for non-IL stubs, the InlinedCallFrame is 'pushed' by setting `Thread->m_pFrame` to point to the InlinedCallFrame (recall that the per-frame initialization already set `InlinedCallFrame->m_pNext` to point to the previous top). For IL stubs this step is accomplished in the per-frame initialization.
-3. The Frame is made active by setting `InlinedCallFrame->m_pCallerReturnAddress`.
-4. The code then toggles the GC mode by setting `Thread->m_fPreemptiveGCDisabled = 0`.
-5. Starting now, no GC pointers may be live in registers. RyuJit LSRA meets this requirement by adding special refPosition `RefTypeKillGCRefs` before unmanaged calls and special helpers.
-6. Then comes the actual call/PInvoke.
-7. The GC mode is set back by setting `Thread->m_fPreemptiveGCDisabled = 1`.
-8. Then we check to see if `g_TrapReturningThreads` is set (non-zero). If it is, we call `CORINFO_HELP_STOP_FOR_GC`.
-    * For ARM, this helper call preserves the return register(s): `R0`, `R1`, `S0`, and `D0`.
-    * For AMD64, the generated code must manually preserve the return value of the PInvoke by moving it to a non-volatile register or a stack location.
-9. Starting now, GC pointers may once again be live in registers.
-10. Clear the `InlinedCallFrame->m_pCallerReturnAddress` back to 0.
-11. For JIT64/AMD64 only: For non-IL stubs 'pop' the Frame chain by resetting `Thread->m_pFrame` back to `InlinedCallFrame.m_pNext`.
+以下は、GC 遷移が抑制されていない場合に実行されます。
 
-Saving/restoring all the non-volatile registers helps by preventing any registers that are unused in the current frame from accidentally having a live GC pointer value from a parent frame. The argument and return registers are 'safe' because they cannot be GC refs. Any refs should have been pinned elsewhere and instead passed as native pointers.
+1. 直接呼び出しの場合、JIT 生成コードは `InlinedCallFrame->m_pDatum` を呼び出し先の MethodDesc に設定します。
+   - JIT64 では、IL スタブ内の間接呼び出しはシークレットパラメータに設定します（これは冗長に見えますが、フレームごとの初期化以降に変更された可能性があります）。
+   - JIT32 (ARM) の間接呼び出しでは、コメントによるとプッシュされた引数のサイズをこのメンバーに設定します。ただし、実装では常に 0 が渡されていました。
+2. JIT64/AMD64 のみ: 次に非 IL スタブの場合、`Thread->m_pFrame` を InlinedCallFrame を指すように設定することで InlinedCallFrame を「プッシュ」します（フレームごとの初期化で既に `InlinedCallFrame->m_pNext` が前の先頭を指すように設定されていることを思い出してください）。IL スタブの場合、この手順はフレームごとの初期化で完了しています。
+3. `InlinedCallFrame->m_pCallerReturnAddress` を設定することで Frame をアクティブにします。
+4. 次に、`Thread->m_fPreemptiveGCDisabled = 0` を設定することで GC モードを切り替えます。
+5. ここから先、GC ポインタがレジスタ内で生存していてはなりません。RyuJIT の LSRA は、アンマネージド呼び出しおよび特殊ヘルパーの前に特殊な refPosition `RefTypeKillGCRefs` を追加することでこの要件を満たします。
+6. ここで実際の呼び出し/PInvoke が行われます。
+7. `Thread->m_fPreemptiveGCDisabled = 1` を設定することで GC モードを元に戻します。
+8. 次に、`g_TrapReturningThreads` が設定されている（非ゼロ）かどうかを確認します。設定されている場合、`CORINFO_HELP_STOP_FOR_GC` を呼び出します。
+   - ARM では、このヘルパー呼び出しはリターンレジスタ `R0`、`R1`、`S0`、`D0` を保持します。
+   - AMD64 では、生成されたコードは PInvoke の戻り値を不揮発性レジスタまたはスタック上の場所に移動して手動で保持する必要があります。
+9. ここから先、GC ポインタは再びレジスタ内で生存することが許されます。
+10. `InlinedCallFrame->m_pCallerReturnAddress` を 0 にクリアします。
+11. JIT64/AMD64 のみ: 非 IL スタブの場合、`Thread->m_pFrame` を `InlinedCallFrame.m_pNext` に戻すことで Frame チェーンを「ポップ」します。
 
-For IL stubs, the Frame chain isn't popped at the call site, so instead it must be popped right before the epilog and right before any jmp calls. It looks like we do not support tail calls from PInvoke IL stubs?
+すべての不揮発性レジスタの保存/復元は、現在のフレームで未使用のレジスタが親フレームからの生存中の GC ポインタ値を誤って保持してしまうことを防ぐのに役立ちます。引数レジスタとリターンレジスタは「安全」です。なぜなら、それらは GC 参照にはなり得ないからです。参照は他の場所でピン留めされ、代わりにネイティブポインタとして渡されるべきです。
 
-# Exception handling
+IL スタブの場合、Frame チェーンは呼び出しサイトでポップされないため、代わりにエピローグの直前および jmp 呼び出しの直前にポップする必要があります。PInvoke IL スタブからのテールコールはサポートされていないようです。
 
-This section describes the conventions the JIT needs to follow when generating code to implement managed exception handling (EH). The JIT and VM must agree on these conventions for a correct implementation.
+# 例外処理
 
-## Funclets
+このセクションでは、マネージド例外処理 (EH) を実装するコードを生成する際に JIT が従うべき規約について説明します。正しい実装のために、JIT と VM はこれらの規約について合意していなければなりません。
 
-For all platforms, managed EH handlers (finally, fault, filter, filter-handler, and catch) are extracted into their own 'funclets'. To the OS they are treated just like first class functions (separate PDATA and XDATA (`RUNTIME_FUNCTION` entry), etc.). The CLR currently treats them just like part of the parent function in many ways. The main function and all funclets must be allocated in a single code allocation (see hot cold splitting). They 'share' GC info. Only the main function prolog can be hot patched.
+## ファンクレット (funclet)
 
-The only way to enter a handler funclet is via a call. In the case of an exception, the call is from the VM's EH subsystem as part of exception dispatch/unwind. In the non-exceptional case, this is called local unwind or a non-local exit. In C# this is accomplished by simply falling-through/out of a try body or an explicit goto. In IL this is always accomplished via a LEAVE opcode, within a try body, targeting an IL offset outside the try body. In such cases the call is from the JITed code of the parent function.
+::: tip 💡 初心者向け補足
+ファンクレット (funclet) とは、例外ハンドラ（catch、finally、fault、filter など）から抽出された独立したコード片です。OS からは独立した関数として扱われますが、CLR 上では親関数の一部として管理されます。たとえば、`try { ... } catch { ... } finally { ... }` のような構文がある場合、catch ブロックと finally ブロックの中身がそれぞれ別のファンクレットとして抽出されます。
+:::
 
-## Cloned finallys
+すべてのプラットフォームにおいて、マネージド EH ハンドラ (finally、fault、filter、filter-handler、catch) は独自の「ファンクレット」に抽出されます。OS にとっては、これらは第一級の関数として扱われます（個別の PDATA と XDATA (`RUNTIME_FUNCTION` エントリ) など）。CLR は現在、多くの点でこれらを親関数の一部として扱っています。メイン関数とすべてのファンクレットは、単一のコード割り当て内に配置されなければなりません（ホット/コールド分割を参照）。これらは GC 情報を「共有」します。ホットパッチできるのはメイン関数のプロローグのみです。
 
-RyuJIT attempts to speed the normal control flow by 'inlining' a called finally along the 'normal' control flow (i.e., leaving a try body in a non-exceptional manner via C# fall-through). This optimization is supported on all architectures.
+ハンドラのファンクレットに入る唯一の方法は呼び出しを通じてです。例外の場合、呼び出しは例外ディスパッチ/アンワインドの一環として VM の EH サブシステムから行われます。例外でない場合、これはローカルアンワインド (local unwind) または非ローカル終了 (non-local exit) と呼ばれます。C# では、try 本体からフォールスルーする/出る、または明示的な goto によって実現されます。IL では、try 本体内の LEAVE オペコードで、try 本体外の IL オフセットをターゲットにすることで常に実現されます。このような場合、呼び出しは親関数の JIT 生成コードから行われます。
 
-## Invoking Finallys/Non-local exits
+## クローン化された finally
 
-In order to have proper forward progress and `Thread.Abort` semantics, there are restrictions on where a call-to-finally can be, and what the call site must look like. The return address can **NOT** be in the corresponding try body (otherwise the VM would think the finally protects itself). The return address **MUST** be within any outer protected region (so exceptions from the finally body are properly handled).
+RyuJIT は、「通常の」制御フロー（C# のフォールスルーで非例外的に try 本体を離れる場合）に沿って呼び出される finally を「インライン化」することで、通常の制御フローを高速化しようとします。この最適化はすべてのアーキテクチャでサポートされています。
 
-RyuJIT creates something similar to a jump island: a block of code outside the try body that calls the finally and then branches to the final target of the leave/non-local-exit. This jump island is then marked in the EH tables as if it were a cloned finally. The cloned finally clause prevents a Thread.Abort from firing before entering the handler. By having the return address outside of the try body we satisfy the other constraint.
+## finally の呼び出し / 非ローカル終了
 
-## ThreadAbortException considerations
+適切な前進保証 (forward progress) と `Thread.Abort` のセマンティクスのために、call-to-finally を配置できる場所と、呼び出しサイトの見た目に制約があります。リターンアドレスは、対応する try 本体内にあっては**なりません**（さもないと VM は finally が自身を保護していると考えてしまいます）。リターンアドレスは、外側の保護領域内になければ**なりません**（finally 本体からの例外が正しく処理されるように）。
 
-There are three kinds of thread abort: (1) rude thread abort, that cannot be stopped, and doesn't run (all?) handlers, (2) calls to the `Thread.Abort()` api, and (3) asynchronous thread abort, injected from another thread.
+RyuJIT はジャンプアイランドに似た仕組みを作成します。try 本体の外にあるコードブロックが finally を呼び出し、その後 leave/非ローカル終了の最終ターゲットに分岐します。このジャンプアイランドは、EH テーブルではクローン化された finally であるかのようにマークされます。クローン化された finally 句により、ハンドラに入る前に Thread.Abort が発火することを防ぎます。リターンアドレスを try 本体の外に配置することで、もう1つの制約も満たします。
 
-Note that ThreadAbortException is fully available in the desktop framework, and is heavily used in ASP.NET, for example. However, it is not supported in .NET Core, CoreCLR, or the Windows 8 "modern app profile". Nonetheless, the JIT generates ThreadAbort-compatible code on all platforms.
+## ThreadAbortException の考慮事項
 
-For non-rude thread abort, the VM walks the stack, running any catch handler that catches ThreadAbortException (or a parent, like System.Exception, or System.Object), and running finallys. There is one very particular characteristic of ThreadAbortException: if a catch handler has caught ThreadAbortException, and the handler returns from handling the exception without calling Thread.ResetAbort(), then the VM *automatically re-raises ThreadAbortException*. To do so, it uses the resume address that the catch handler returned as the effective address where the re-raise is considered to have been raised. This is the address of the label that is specified by a LEAVE opcode within the catch handler. There are cases where the JIT must insert synthetic "step blocks" such that this label is within an appropriate enclosing "try" region, to ensure that the re-raise can be caught by an enclosing catch handler.
+::: tip 💡 初心者向け補足
+ThreadAbortException は、あるスレッドから別のスレッドを中断 (abort) できるようにする .NET 固有のメカニズムです。デスクトップ .NET Framework では利用可能で、ASP.NET などで多用されていましたが、.NET Core / 現在の .NET ではサポートされていません。それにもかかわらず、JIT は互換性のためにすべてのプラットフォームで ThreadAbort 対応コードを生成します。
+:::
 
-For example:
+スレッドアボートには3種類あります: (1) ルードスレッドアボート (rude thread abort) — 停止できず、（すべての？）ハンドラを実行しないもの、(2) `Thread.Abort()` API の呼び出し、(3) 別のスレッドから注入される非同期スレッドアボートです。
+
+ThreadAbortException はデスクトップフレームワークでは完全に利用可能であり、たとえば ASP.NET で頻繁に使用されていました。しかし、.NET Core、CoreCLR、Windows 8 の「モダンアプリプロファイル」ではサポートされていません。それにもかかわらず、JIT はすべてのプラットフォームで ThreadAbort 互換のコードを生成します。
+
+非ルードスレッドアボートの場合、VM はスタックをウォークし、ThreadAbortException をキャッチする catch ハンドラ（または System.Exception や System.Object などの親クラス）を実行し、finally を実行します。ThreadAbortException には非常に特殊な特性が1つあります。catch ハンドラが ThreadAbortException をキャッチし、Thread.ResetAbort() を呼び出さずに例外処理から戻った場合、VM は _ThreadAbortException を自動的に再発生させます_。そのために、catch ハンドラが返したレジュームアドレスを、再発生が発生したと見なされる実効アドレスとして使用します。これは catch ハンドラ内の LEAVE オペコードで指定されたラベルのアドレスです。JIT は合成的な「ステップブロック」を挿入して、このラベルが適切な外側の "try" リージョン内に収まるようにし、再発生が外側の catch ハンドラによってキャッチされるようにしなければならない場合があります。
+
+例:
 
 ```cs
 try { // try 1
@@ -262,7 +300,7 @@ try { // try 1
 L:
 ```
 
-In this case, if the address returned in catch 2 corresponding to label L is outside try 1, then the ThreadAbortException re-raised by the VM will not be caught by catch 1, as is expected. The JIT needs to insert a block such that this is the effective code generation:
+この場合、catch 2 で返されたラベル L に対応するアドレスが try 1 の外にあると、VM によって再発生された ThreadAbortException は catch 1 にキャッチされません（期待通り）。JIT は効果的に以下のようなコード生成になるようにブロックを挿入する必要があります:
 
 ```cs
 try { // try 1
@@ -279,7 +317,7 @@ try { // try 1
 L:
 ```
 
-Similarly, the automatic re-raise address for a ThreadAbortException can't be within a finally handler, or the VM will abort the re-raise and swallow the exception. This can happen due to call-to-finally thunks marked as "cloned finally", as described above. For example (this is pseudo-assembly-code, not C#):
+同様に、ThreadAbortException の自動再発生アドレスは finally ハンドラ内にあってはなりません。さもないと VM は再発生を中止し、例外を飲み込んでしまいます。これは、上述のように「クローン化された finally」としてマークされた call-to-finally サンクにより発生する可能性があります。例（これは擬似アセンブリコードであり、C# ではありません）:
 
 ```cs
 try { // try 1
@@ -295,7 +333,7 @@ try { // try 1
 L:
 ```
 
-This would generate something like:
+これは以下のようなコードを生成します:
 
 ```asm
 	// beginning of 'try 1'
@@ -320,7 +358,7 @@ Finally1:
 	ret
 ```
 
-Note that the JIT must already insert a "step" block so the finally will be called. However, this isn't sufficient to support ThreadAbortException processing, because "L1" is marked as "cloned finally". In this case, the JIT must insert another step block that is within "try 1" but outside the cloned finally block, that will allow for correct re-raise semantics. For example:
+JIT は finally が呼び出されるように「ステップ」ブロックを挿入する必要がありますが、これだけでは ThreadAbortException の処理をサポートするには不十分です。なぜなら "L1" が「クローン化された finally」としてマークされているからです。この場合、JIT は "try 1" 内かつクローン化された finally ブロックの外にある別のステップブロックを挿入して、正しい再発生セマンティクスを可能にする必要があります。例:
 
 ```asm
 	// beginning of 'try 1'
@@ -346,63 +384,67 @@ Finally1:
 	ret
 ```
 
-Note that JIT64 does not implement this properly. The C# compiler used to always insert all necessary "step" blocks. The Roslyn C# compiler at one point did not, but then was changed to once again insert them.
+JIT64 はこれを正しく実装していないことに注意してください。C# コンパイラはかつて常に必要なすべての「ステップ」ブロックを挿入していました。Roslyn C# コンパイラは一時期これを行わなくなりましたが、その後再び挿入するように変更されました。
 
-## Funclet parameters
+## ファンクレットのパラメータ
 
-Catch, Filter, and Filter-handlers get an Exception object (GC ref) as an argument (`REG_EXCEPTION_OBJECT`). On AMD64 it is passed in RCX (Windows ABI) or RSI (Unix ABI). On ARM and ARM64 this is the first argument and passed in R0.
+catch、filter、filter-handler は、引数として例外オブジェクト (GC 参照) を受け取ります (`REG_EXCEPTION_OBJECT`)。AMD64 では RCX (Windows ABI) または RSI (Unix ABI) で渡されます。ARM および ARM64 では、これは最初の引数であり R0 で渡されます。
 
-## Funclet Return Values
+## ファンクレットの戻り値
 
-The filter funclet returns a simple boolean value in the normal return register (x86: `EAX`, AMD64: `RAX`, ARM/ARM64: `R0`). Non-zero indicates to the VM/EH subsystem that the corresponding filter-handler will handle the exception (i.e. begin the second pass). Zero indicates to the VM/EH subsystem that the exception is **not** handled, and it should continue looking for another filter or catch.
+filter ファンクレットは、通常のリターンレジスタ (x86: `EAX`、AMD64: `RAX`、ARM/ARM64: `R0`) に単純なブール値を返します。非ゼロは、対応する filter-handler が例外を処理する（つまり第2パスを開始する）ことを VM/EH サブシステムに示します。ゼロは、例外が処理**されない**ことを VM/EH サブシステムに示し、別の filter または catch の検索を続行すべきことを意味します。
 
-The catch and filter-handler funclets return a code address in the normal return register that indicates where the VM should resume execution after unwinding the stack and cleaning up from the exception. This address should be somewhere in the parent funclet (or main function if the catch or filter-handler is not nested within any other funclet). Because an IL 'leave' opcode can exit out of arbitrary nesting of funclets and try bodies, the JIT is often required to inject step blocks. These are intermediate branch target(s) that then branch to the next outermost target until the real target can be directly reached via the native ABI constraints. These step blocks can also invoke finallys (see *Invoking Finallys/Non-local exits*).
+catch および filter-handler のファンクレットは、通常のリターンレジスタにコードアドレスを返します。これは、スタックのアンワインドと例外のクリーンアップ後に VM が実行を再開すべき場所を示します。このアドレスは、親ファンクレット内のどこか（catch や filter-handler が他のファンクレット内にネストされていない場合はメイン関数内）にあるべきです。IL の 'leave' オペコードは任意のネストのファンクレットと try 本体から抜け出すことができるため、JIT はしばしばステップブロックの挿入を求められます。これらは中間的な分岐ターゲットであり、ネイティブ ABI の制約により実際のターゲットに直接到達できるようになるまで、次の最も外側のターゲットに分岐します。これらのステップブロックは finally を呼び出すこともできます（*finally の呼び出し / 非ローカル終了*を参照）。
 
-Finally and fault funclets do not have a return value.
+finally および fault のファンクレットには戻り値はありません。
 
-## Register values and exception handling
+## レジスタの値と例外処理
 
-Exception handling imposes certain restrictions on the usage of registers in functions with exception handling.
+例外処理は、例外処理を含む関数におけるレジスタの使用に一定の制約を課します。
 
-CoreCLR and "desktop" CLR behave the same way. Windows and non-Windows implementations of the CLR both follow these rules.
+CoreCLR と「デスクトップ」CLR は同じ動作をします。Windows と非 Windows の CLR 実装は共にこれらの規則に従います。
 
-Some definitions:
+いくつかの定義:
 
-*Non-volatile* (aka *callee-saved* or *preserved*) registers are those defined by the ABI that a function call preserves. Non-volatile registers include the frame pointer and the stack pointer, among others.
+_不揮発性 (Non-volatile)_（別名 _callee-saved_ または _preserved_）レジスタとは、ABI により関数呼び出し後も保持されるレジスタです。不揮発性レジスタには、フレームポインタとスタックポインタなどが含まれます。
 
-*Volatile* (aka *caller-saved* or *trashed*) registers are those defined by the ABI that a function call does not preserve, and thus might have a different value when the function returns.
+_揮発性 (Volatile)_（別名 _caller-saved_ または _trashed_）レジスタとは、ABI により関数呼び出し後に保持されないレジスタであり、関数が戻った時点で異なる値になっている可能性があります。
 
-### Registers on entry to a funclet
+### ファンクレット入場時のレジスタ
 
-When an exception occurs, the VM is invoked to do some processing. If the exception is within a "try" region, it eventually calls a corresponding handler (which also includes calling filters). The exception location within a function might be where a "throw" instruction executes, the point of a processor exception like null pointer dereference or divide by zero, or the point of a call where the callee threw an exception but did not catch it.
+例外が発生すると、VM が何らかの処理を行うために呼び出されます。例外が "try" リージョン内にある場合、最終的に対応するハンドラを呼び出します（filter の呼び出しも含まれます）。関数内の例外発生場所は、"throw" 命令が実行される場所、ヌルポインタ参照やゼロ除算などのプロセッサ例外の発生点、または呼び出し先が例外をスローしたがキャッチしなかった呼び出しの発生点のいずれかです。
 
-The VM sets the frame register to be the same as the parent function. This allows the funclets to access local variables using frame-relative addresses.
+VM はフレームレジスタを親関数と同じ値に設定します。これにより、ファンクレットはフレーム相対アドレスを使用してローカル変数にアクセスできます。
 
-For filter funclets, all other register values that existed at the exception point in the corresponding "try" region are trashed on entry to the funclet. That is, the only registers that have known values are those of the funclet parameters and the frame register.
+filter ファンクレットの場合、対応する "try" リージョンの例外発生点に存在していたその他すべてのレジスタ値は、ファンクレットへの入場時に破壊されます。つまり、既知の値を持つレジスタはファンクレットのパラメータとフレームレジスタのみです。
 
-For other funclets, all non-volatile registers are restored to their values at the exception point. The JIT codegen [does not take advantage of it currently](https://github.com/dotnet/runtime/pull/114630#issuecomment-2810210759).
+その他のファンクレットの場合、すべての不揮発性レジスタは例外発生点の値に復元されます。ただし、JIT のコード生成は[現在これを活用していません](https://github.com/dotnet/runtime/pull/114630#issuecomment-2810210759)。
 
-### Registers on return from a funclet
+### ファンクレットからの戻り時のレジスタ
 
-When a funclet finishes execution, and the VM returns execution to the function (or an enclosing funclet, if there is EH clause nesting), the non-volatile registers are restored to the values they held at the exception point. Note that the volatile registers have been trashed.
+ファンクレットの実行が終了し、VM が（EH 句のネストがある場合はその外側のファンクレットまたは）関数に実行を戻す際、不揮発性レジスタは例外発生点で保持していた値に復元されます。揮発性レジスタは破壊されていることに注意してください。
 
-Any register value changes made in the funclet are lost. If a funclet wants to make a variable change known to the main function (or the funclet that contains the "try" region), that variable change needs to be made to the shared main function stack frame. This not a fundamental limitation. If necessary, the runtime can be updated to preserve non-volatile register changes made in funclets.
+ファンクレット内で行われたレジスタの値の変更は失われます。ファンクレットがメイン関数（または "try" リージョンを含むファンクレット）に変数の変更を通知したい場合、その変数の変更は共有されるメイン関数のスタックフレームに対して行う必要があります。これは根本的な制限ではありません。必要であれば、ランタイムを更新してファンクレット内で行われた不揮発性レジスタの変更を保持することが可能です。
 
-Funclets are not required to preserve non-volatile registers.
+ファンクレットは不揮発性レジスタを保持する必要はありません。
 
-# EH Info, GC Info, and Hot & Cold Splitting
+# EH 情報、GC 情報、およびホット＆コールドスプリッティング
 
-All GC info offsets and EH info offsets treat the function and funclets as if it was one big method body. Thus all offsets are relative to the start of the main method. Funclets are assumed to always be at the end of (after) all of the main function code. Thus if the main function has any cold code, all funclets must be cold. Or conversely, if there is any hot funclet code, all of the main method must be hot.
+::: tip 💡 初心者向け補足
+ホット＆コールドスプリッティング (Hot & Cold Splitting) とは、JIT が頻繁に実行されるコード（ホットコード）とめったに実行されないコード（コールドコード、例えば例外ハンドラ）を分離する最適化手法です。ホットコードをまとめて配置することで、CPU キャッシュの局所性が向上し、パフォーマンスが改善されます。
+:::
 
-## EH clause ordering
+すべての GC 情報オフセットおよび EH 情報オフセットは、関数とファンクレット (funclet) をあたかも1つの大きなメソッド本体であるかのように扱います。したがって、すべてのオフセットはメインメソッドの先頭からの相対値です。ファンクレットは常にメイン関数コードのすべての後（末尾）にあると仮定されます。したがって、メイン関数にコールドコードがある場合、すべてのファンクレットもコールドでなければなりません。逆に言えば、ホットなファンクレットコードがある場合、メインメソッド全体がホットでなければなりません。
 
-EH clauses must be sorted inner-to-outer, first-to-last based on IL offset of the try start/try end pair. The only exceptions are cloned finallys, which always appear at the end.
+## EH 句の順序
 
-## How EH affects GC info/reporting
+EH 句は、try 開始/try 終了ペアの IL オフセットに基づいて、内側から外側へ、先頭から末尾への順序でソートされなければなりません。唯一の例外はクローンされた finally であり、これは常に末尾に配置されます。
 
-Because a main function body will **always** be on the stack when one of its funclets is on the stack, the GC info must be careful not to double-report. JIT64 accomplished this by having all named locals appear in the parent method frame, anything shared between the function and funclets was homed to the stack, and only the parent function reported stack locals (funclets might report local registers). JIT32 and RyuJIT (for AMD64, ARM, and ARM64) take the opposite direction. The leaf-most funclet is responsible for reporting everything that might be live out of a funclet (in the case of a filter, this might resume back in the original method body). This is accomplished with the GC header flag WantsReportOnlyLeaf (JIT32 and RyuJIT set it, JIT64 doesn't) and the VM tracking if it has already seen a funclet for a given frame. Once JIT64 is fully retired, we should be able to remove this flag from GC info.
+## EH が GC 情報/報告に与える影響
 
-There is one "corner case" in the VM implementation of WantsReportOnlyLeaf model that has implications for the code the JIT is allowed to generate. Consider this function with nested exception handling:
+メイン関数本体は、そのファンクレットの1つがスタック上にあるとき、**常に** スタック上に存在します。そのため、GC 情報は二重報告しないよう注意しなければなりません。JIT64 は、すべての名前付きローカル変数を親メソッドフレームに配置し、関数とファンクレット間で共有されるものはスタックにホーミングし、親関数のみがスタックローカル変数を報告する（ファンクレットはローカルレジスタを報告する場合がある）ことでこれを達成しました。JIT32 と RyuJIT（AMD64、ARM、ARM64 向け）は逆のアプローチを取ります。最も末端のファンクレットが、ファンクレットから生存している可能性のあるすべてのものを報告する責任を持ちます（フィルタの場合、元のメソッド本体に戻って再開する可能性があります）。これは GC ヘッダフラグ WantsReportOnlyLeaf（JIT32 と RyuJIT が設定し、JIT64 は設定しない）と、VM が特定のフレームに対してすでにファンクレットを検出したかどうかを追跡することで実現されます。JIT64 が完全に引退すれば、このフラグを GC 情報から削除できるはずです。
+
+WantsReportOnlyLeaf モデルの VM 実装には、JIT が生成できるコードに影響を与える「コーナーケース」が1つあります。ネストされた例外処理を持つ以下の関数を考えてみましょう：
 
 ```cs
 public void runtest() {
@@ -421,159 +463,171 @@ public void runtest() {
 }
 ```
 
-When the inner "throw new UserException4" is executed, the exception handling first pass finds that the outer catch handler will handle the exception. The exception handling second pass unwinds stack frames back to the "runtest" frame, and then executes the catch handler. There is a period of time during which the original catch handler ("catch (UserException3 e)") is no longer on the stack, but before the new catch handler is executed. During this time, a GC might occur. In this case, the VM needs to make sure to report GC roots properly for the "runtest" function. The inner catch has been unwound, so we can't report that. We don't want to report at "// 1", which is still on the stack, because that effectively is "going backwards" in execution, and doesn't properly represent what object references are live. We need to report live object references at the next location where execution will occur. This is the "// 2" location. However, we can't report the first location of the catch funclet, as that will be non-interruptible. The VM instead looks forward for the first interruptible point in that handler, and reports live references that the JIT reports for that location. This will be the first location after the handler prolog. There are several implications of this implementation for the JIT. It requires that:
+内側の "throw new UserException4" が実行されると、例外処理の第1パスで外側の catch ハンドラがこの例外を処理することが判明します。例外処理の第2パスでスタックフレームを "runtest" フレームまでアンワインドし、catch ハンドラを実行します。元の catch ハンドラ ("catch (UserException3 e)") がスタック上になくなってから、新しい catch ハンドラが実行されるまでの間に、時間的な空白が生じます。この間に GC が発生する可能性があります。この場合、VM は "runtest" 関数の GC ルートを適切に報告する必要があります。内側の catch はアンワインドされているため、そこを報告することはできません。スタック上にまだ残っている "// 1" で報告することも望ましくありません。なぜなら、それは実質的に実行を「遡る」ことになり、どのオブジェクト参照が生存しているかを正しく表していないためです。次に実行が行われる場所で生存しているオブジェクト参照を報告する必要があります。それが "// 2" の場所です。しかし、catch ファンクレットの最初の場所は非割り込み可能であるため、そこを報告することはできません。代わりに VM はそのハンドラ内の最初の割り込み可能ポイントを先読みし、JIT がその場所で報告する生存参照を報告します。この場所はハンドラプロローグの直後の最初の場所になります。この実装は JIT に対していくつかの影響を与えます。以下が要求されます：
 
-1. Methods which have EH clauses are fully interruptible.
-2. All catch funclets have an interruptible point immediately after the prolog.
-3. The first interruptible point in the catch funclet reports the following live objects on the stack
-    * Only objects that are shared with parent method i.e. no additional stack object which is live only in catch funclet and not live in parent method.
-    * All shared objects which are referenced in catch funclet and any subsequent control flow are reported live.
+1. EH 句を持つメソッドは完全に割り込み可能 (fully interruptible) でなければなりません。
+2. すべての catch ファンクレットはプロローグの直後に割り込み可能ポイントを持たなければなりません。
+3. catch ファンクレットの最初の割り込み可能ポイントは、スタック上の以下の生存オブジェクトを報告しなければなりません：
+   - 親メソッドと共有されるオブジェクトのみ。つまり、catch ファンクレットでのみ生存し、親メソッドでは生存していない追加のスタックオブジェクトは含めません。
+   - catch ファンクレットおよび後続の制御フローで参照されるすべての共有オブジェクトが生存として報告されなければなりません。
 
-## Filter GC semantics
+## フィルタの GC セマンティクス
 
-Filters are invoked in the 1st pass of EH processing and as such execution might resume back at the faulting address, or in the filter-handler, or someplace else. Because the VM must allow GC's to occur during and after a filter invocation, but before the EH subsystem knows where it will resume, we need to keep everything alive at both the faulting address **and** within the filter. This is accomplished by 3 means: (1) the VM's stackwalker and GCInfoDecoder report as live both the filter frame and its corresponding parent frame, (2) the JIT encodes all stack slots that are live within the filter as being pinned, and (3) the JIT reports as live (and possible zero-initializes) anything live-out of the filter. Because of (1) it is likely that a stack variable that is live within the filter and the try body will be double reported. During the mark phase of the GC double reporting is not a problem. The problem only arises if the object is relocated: if the same location is reported twice, the GC will try to relocate the address stored at that location twice. Thus we prevent the object from being relocated by pinning it, which leads us to why we must do (2). (3) is done so that after the filter returns, we can still safely incur a GC before executing the filter-handler or any outer handler within the same frame. For the same reason, control must exit a filter region via its final block (in other words, a filter region must terminate with the instruction that leaves the filter region, and the program may not exit the filter region via other paths).
+フィルタ (filter) は EH 処理の第1パスで呼び出されるため、フォルトアドレス、フィルタハンドラ、またはその他の場所で実行が再開される可能性があります。VM はフィルタの呼び出し中および呼び出し後に GC の発生を許可しなければなりませんが、EH サブシステムがどこで再開するかがまだわかっていない段階であるため、フォルトアドレス**および**フィルタ内の両方ですべてを生存状態に保つ必要があります。これは3つの手段によって達成されます：(1) VM のスタックウォーカーと GCInfoDecoder がフィルタフレームとそれに対応する親フレームの両方を生存として報告する、(2) JIT がフィルタ内で生存しているすべてのスタックスロットをピン留め (pinned) としてエンコードする、(3) JIT がフィルタから生存アウト (live-out) するすべてのものを生存として報告する（場合によってはゼロ初期化する）。(1) のため、フィルタ内と try 本体の両方で生存しているスタック変数は二重報告される可能性が高いです。GC のマークフェーズでは二重報告は問題になりません。問題が生じるのはオブジェクトが再配置 (relocate) される場合のみです：同じ場所が2回報告されると、GC はその場所に格納されているアドレスを2回再配置しようとします。そのため、オブジェクトをピン留めして再配置を防止します。これが (2) を行う必要がある理由です。(3) は、フィルタが返った後、フィルタハンドラまたは同じフレーム内のいずれかの外側ハンドラを実行する前に、安全に GC を実行できるようにするために行われます。同じ理由から、制御はフィルタ領域の最終ブロックを介して終了しなければなりません（つまり、フィルタ領域はフィルタ領域を離れる命令で終了しなければならず、プログラムは他のパスからフィルタ領域を終了してはなりません）。
 
-## Clauses covering the same try region
+## 同じ try 領域をカバーする句
 
-Several consecutive clauses may cover the same `try` block. A clause covering the same region as the previous one is marked by the `COR_ILEXCEPTION_CLAUSE_SAMETRY` flag. When exception ex1 is thrown while running handler for another exception ex2 and the exception ex2 escapes the ex1's handler frame, this enables the runtime to skip clauses that cover the same `try` block as the clause that handled the ex1.
-This flag is used by the NativeAOT and also a new exception handling mechanism in CoreCLR. The NativeAOT doesn't store that flag in the encoded clause data, but rather injects a dummy clause between the clauses with same `try` block. CoreCLR keeps that flag as part of the runtime representation of the clause data. The current CoreCLR exception handling doesn't use it, but [a new exception handling mechanism](https://github.com/dotnet/runtime/issues/77568) that's being developed is taking advantage of it.
+連続するいくつかの句が同じ `try` ブロックをカバーする場合があります。前の句と同じ領域をカバーする句は `COR_ILEXCEPTION_CLAUSE_SAMETRY` フラグでマークされます。例外 ex1 が別の例外 ex2 のハンドラの実行中にスローされ、例外 ex2 が ex1 のハンドラフレームをエスケープした場合、このフラグによりランタイムは ex1 を処理した句と同じ `try` ブロックをカバーする句をスキップできます。
+このフラグは NativeAOT と CoreCLR の新しい例外処理メカニズムで使用されます。NativeAOT はエンコードされた句データにこのフラグを格納せず、代わりに同じ `try` ブロックを持つ句の間にダミー句を挿入します。CoreCLR は句データのランタイム表現の一部としてこのフラグを保持します。現在の CoreCLR の例外処理はそれを使用しませんが、開発中の[新しい例外処理メカニズム](https://github.com/dotnet/runtime/issues/77568)がそれを活用しています。
 
-## GC Interruptibility and EH
+## GC 割り込み可能性と EH
 
-The VM assumes that anytime a thread is stopped, it must be at a GC safe point, or the current frame is non-resumable (i.e. a throw that will never be caught in the same frame). Thus effectively all methods with EH must be fully interruptible (or at a minimum all try bodies). Currently the GC info appears to support mixing of partially interruptible and fully-interruptible regions within the same method, but no JIT uses this, so use at your own risk.
+VM は、スレッドが停止されるたびに、GC セーフポイントにあるか、現在のフレームが再開不可能（つまり、同じフレーム内でキャッチされることのない throw）であると仮定します。したがって、実質的に EH を持つすべてのメソッドは完全に割り込み可能でなければなりません（最低限、すべての try 本体が割り込み可能でなければなりません）。現在、GC 情報は同じメソッド内で部分的に割り込み可能な領域と完全に割り込み可能な領域を混在させることをサポートしているように見えますが、どの JIT もこれを使用していないため、自己責任でご使用ください。
 
-The debugger always wants to stop at GC safe points, and thus debuggable code should be fully interruptible to maximize the places where the debugger can safely stop. If the JIT creates non-interruptible regions within fully interruptible code, the code should ensure that each sequence point begins on an interruptible instruction.
+デバッガは常に GC セーフポイントで停止したいため、デバッグ可能なコードはデバッガが安全に停止できる場所を最大化するために完全に割り込み可能であるべきです。JIT が完全に割り込み可能なコード内に非割り込み可能な領域を作成する場合、各シーケンスポイントが割り込み可能な命令で始まるようにすべきです。
 
-AMD64/JIT64 only: The JIT will add an interruptible NOP if needed.
+AMD64/JIT64 のみ：JIT は必要に応じて割り込み可能な NOP を追加します。
 
-## Security Object
+## セキュリティオブジェクト
 
-The security object is a GC pointer and must be reported as such, and kept alive the duration of the method.
+セキュリティオブジェクトは GC ポインタであり、そのように報告され、メソッドの存続期間中生存状態に保たれなければなりません。
 
 ## GS Cookie
 
-The GS Cookie is not a GC object, but still needs to be reported. It can only have one lifetime due to how it is encoded/reported in the GC info. Since the GS Cookie ceases being valid once we pop the stack, the epilog cannot be part of the live range. Since we only get one live range that means there cannot be any code (except funclets) after the epilog in methods with a GS cookie.
+GS Cookie は GC オブジェクトではありませんが、報告される必要があります。GC 情報でのエンコード/報告方法のため、ライフタイムは1つしか持てません。GS Cookie はスタックをポップすると無効になるため、エピローグはライブ範囲の一部にはなれません。ライブ範囲が1つしか取れないため、GS Cookie を持つメソッドではエピローグの後にコード（ファンクレットを除く）を配置することはできません。
 
-## NOPs and other Padding
+## NOP とその他のパディング
 
-### AMD64 padding info
+### AMD64 パディング情報
 
-The unwind callbacks don't know if the current frame is a leaf or a return address. Consequently, the JIT must ensure that the return address of a call is in the same region as the call. Specifically, the JIT must add a NOP (or some other instruction) after any call that otherwise would directly precede the start of a try body, the end of a try body, or the end of a method.
+アンワインドコールバックは、現在のフレームがリーフフレームなのかリターンアドレスなのかを判別できません。したがって、JIT は呼び出しのリターンアドレスが呼び出しと同じ領域内にあることを保証しなければなりません。具体的には、JIT は、呼び出しがそのまま try 本体の開始、try 本体の終了、またはメソッドの終了の直前に来る場合、その呼び出しの後に NOP（またはその他の命令）を追加しなければなりません。
 
-The OS has an optimization in the unwinder such that if an unwind results in a PC being within (or at the start of) an epilog, it assumes that frame is unimportant and unwinds again. Since the CLR considers every frame important, it does not want this double-unwind behavior and requires the JIT to place a NOP (or other instruction) between any call and any epilog.
+OS はアンワインダに最適化があり、アンワインドの結果 PC がエピローグ内（またはエピローグの開始位置）にある場合、そのフレームは重要でないと仮定して再びアンワインドします。CLR はすべてのフレームを重要とみなすため、この二重アンワインド動作を望まず、JIT に呼び出しとエピローグの間に NOP（またはその他の命令）を配置することを要求します。
 
-### ARM and ARM64 padding info
+### ARM および ARM64 パディング情報
 
-The OS unwinder uses the `RUNTIME_FUNCTION` extents to determine which function or funclet to unwind out of. The net result is that a call (bl opcode) to `IL_Throw` cannot be the last thing. So similar to AMD64 the JIT must inject an opcode (a breakpoint in this case) when the `bl IL_Throw` would otherwise be the last opcode of a function or funclet, the last opcode before the end of the hot section, or (this might be an x86-ism leaking into ARM) the last before a "special throw block".
+OS アンワインダは `RUNTIME_FUNCTION` の範囲を使用して、どの関数またはファンクレットからアンワインドするかを決定します。結果として、`IL_Throw` への呼び出し（bl オペコード）を最後の命令にすることはできません。したがって AMD64 と同様に、`bl IL_Throw` が関数またはファンクレットの最後のオペコード、ホットセクションの終了前の最後のオペコード、または（これは ARM に漏れ出た x86 の慣習かもしれませんが）「特殊 throw ブロック」の直前の最後のオペコードになる場合、JIT はオペコード（この場合はブレークポイント）を挿入しなければなりません。
 
-# Profiler Hooks
+# プロファイラーフック
 
-If the JIT gets passed `CORJIT_FLG_PROF_ENTERLEAVE`, then the JIT might need to insert native entry/exit/tail call probes. To determine for sure, the JIT must call GetProfilingHandle. This API returns as out parameters, the true dynamic boolean indicating if the JIT should actually insert the probes and a parameter to pass to the callbacks (typed as void*), with an optional indirection (used for NGEN). This parameter is always the first argument to all of the call-outs (thus placed in the usual first argument register `RCX` (AMD64) or `R0` (ARM, ARM64)).
+::: tip 💡 初心者向け補足
+プロファイラーフック (Profiler Hooks) は、プロファイリングツールが実行時にメソッドの入口・出口・テールコールを監視できるようにするコールバックの仕組みです。Java の JVMTI エージェントに似た概念で、パフォーマンス分析やコードカバレッジ計測などに使用されます。
+:::
 
-Outside of the prolog (in a GC interruptible location), the JIT injects a call to `CORINFO_HELP_PROF_FCN_ENTER`. For AMD64,  on Windows all argument registers will be homed into their caller-allocated stack locations (similar to varargs), on Unix all argument registers will be stored in the inner structure. For ARM and ARM64, all arguments are prespilled (again similar to varargs).
+JIT に `CORJIT_FLG_PROF_ENTERLEAVE` が渡された場合、JIT はネイティブの入口/出口/テールコールプローブを挿入する必要があるかもしれません。確実に判断するために、JIT は GetProfilingHandle を呼び出す必要があります。この API は out パラメータとして、JIT が実際にプローブを挿入すべきかどうかを示す動的なブール値と、コールバックに渡すパラメータ（void\* 型）を返します。オプションで間接参照（NGEN で使用）もあります。このパラメータは常にすべてのコールアウトの第1引数です（したがって、通常の第1引数レジスタ `RCX`（AMD64）または `R0`（ARM、ARM64）に配置されます）。
 
-After computing the return value and storing it in the correct register, but before any epilog code (including before a possible GS cookie check), the JIT injects a call to `CORINFO_HELP_PROF_FCN_LEAVE`. For AMD64 this call must preserve the return register: `RAX` or `XMM0` on Windows and `RAX` and `RDX` or `XMM0` and `XMM1` on Unix. For ARM, the return value will be moved from `R0` to `R2` (if it was in `R0`), `R1`, `R2`, and `S0/D0` must be preserved by the callee (longs will be `R2`, `R1` - note the unusual ordering of the registers, floats in `S0`, doubles in `D0`, smaller integrals in `R2`).
+プロローグの外側（GC 割り込み可能な場所）で、JIT は `CORINFO_HELP_PROF_FCN_ENTER` への呼び出しを挿入します。AMD64 の場合、Windows ではすべての引数レジスタが呼び出し元が割り当てたスタック位置にホーミングされ（varargs と同様）、Unix ではすべての引数レジスタが内部構造体に格納されます。ARM および ARM64 の場合、すべての引数はプリスピル (prespill) されます（これも varargs と同様）。
 
-TODO: describe ARM64 profile leave conventions.
+戻り値を計算して正しいレジスタに格納した後、エピローグコードの前（GS Cookie チェックの前を含む）に、JIT は `CORINFO_HELP_PROF_FCN_LEAVE` への呼び出しを挿入します。AMD64 の場合、この呼び出しはリターンレジスタを保存しなければなりません：Windows では `RAX` または `XMM0`、Unix では `RAX` と `RDX` または `XMM0` と `XMM1` です。ARM の場合、戻り値は `R0` から `R2` に移動され（`R0` にあった場合）、`R1`、`R2`、および `S0/D0` は呼び出し先によって保存されなければなりません（long は `R2`、`R1` の順 — レジスタの並び順が通常と異なることに注意、浮動小数点は `S0`、倍精度は `D0`、より小さい整数型は `R2`）。
 
-Before the argument setup (but after any argument side-effects) for any tail calls or jump calls, the JIT injects a call to `CORINFO_HELP_PROF_FCN_TAILCALL`. Note that it is NOT called for self-recursive tail calls turned into loops.
+TODO：ARM64 のプロファイルリーブ規約を記述する。
 
-For ARM tail calls, the JIT actually loads the outgoing arguments first, and then just before the profiler call-out, spills the argument in `R0` to another non-volatile register, makes the call (passing the callback parameter in `R0`), and then restores `R0`.
+テールコールまたはジャンプコールの引数セットアップの前（ただし引数の副作用の後）に、JIT は `CORINFO_HELP_PROF_FCN_TAILCALL` への呼び出しを挿入します。自己再帰的なテールコールがループに変換された場合は呼び出されないことに注意してください。
 
-For AMD64, all probes receive a second parameter (passed in `RDX` according to the default argument rules) which is the address of the start of the arguments' home location (equivalent to the value of the caller's stack pointer).
+ARM のテールコールの場合、JIT は実際には先に送信引数をロードし、プロファイラーコールアウトの直前に `R0` の引数を別の非揮発性レジスタにスピルし、呼び出しを行い（コールバックパラメータを `R0` で渡し）、その後 `R0` を復元します。
 
-TODO: describe ARM64 tail call convention.
+AMD64 の場合、すべてのプローブはデフォルトの引数規則に従って `RDX` で渡される第2パラメータを受け取ります。これは引数のホーム位置の開始アドレス（呼び出し元のスタックポインタの値に相当）です。
 
-On Linux/x86 the profiling hooks are declared with the ```__cdecl``` attribute.  In cdecl (which stands for C declaration), subroutine arguments are passed on the stack. Integer values and memory addresses are returned in the EAX register, floating point values in the ST0 x87 register. Registers EAX, ECX, and EDX are caller-saved, and the rest are callee-saved. The x87 floating point registers ST0 to ST7 must be empty (popped or freed) when calling a new function, and ST1 to ST7 must be empty on exiting a function. ST0 must also be empty when not used for returning a value. Returned values of managed-code are formed before the leave/tailcall profiling hooks, so they should be saved in these hooks and restored on returning from them. The instruction ```ret``` for assembler implementations of profiling hooks should be without a parameter.
+TODO：ARM64 のテールコール規約を記述する。
 
-JIT32 only generates one epilog (and causes all returns to branch to it) when there are profiler hooks.
+Linux/x86 では、プロファイリングフックは `__cdecl` 属性で宣言されます。cdecl（C declaration の略）では、サブルーチンの引数はスタック上で渡されます。整数値とメモリアドレスは EAX レジスタで返され、浮動小数点値は ST0 x87 レジスタで返されます。レジスタ EAX、ECX、EDX は呼び出し元保存 (caller-saved) であり、残りは呼び出し先保存 (callee-saved) です。x87 浮動小数点レジスタ ST0 から ST7 は、新しい関数を呼び出す際に空（ポップまたは解放）でなければなりません。また、関数の終了時には ST1 から ST7 は空でなければなりません。ST0 も戻り値の返却に使用しない場合は空でなければなりません。マネージドコードの戻り値は leave/tailcall プロファイリングフックの前に形成されるため、これらのフックで保存し、フックからの復帰時に復元する必要があります。プロファイリングフックのアセンブラ実装における命令 `ret` はパラメータなしでなければなりません。
 
-# Synchronized Methods
+JIT32 はプロファイラーフックがある場合、エピローグを1つだけ生成し（すべての return をそこにブランチさせ）ます。
 
-JIT32/RyuJIT only generates one epilog (and causes all returns to branch to it) when a method is synchronized. See `Compiler::fgAddSyncMethodEnterExit()`. The user code is wrapped in a try/finally. Outside/before the try body, the code initializes a boolean to false. `CORINFO_HELP_MON_ENTER` or `CORINFO_HELP_MON_ENTER_STATIC` are called, passing the lock object (the `this` pointer for instance methods or the Type object for static methods) and the address of the boolean. If the lock is acquired, the boolean is set to true (as an 'atomic' operation in the sense that a Thread.Abort/EH/GC/etc. cannot interrupt the Thread when the boolean does not match the acquired state of the lock). JIT32/RyuJIT follows the exact same logic and arguments for placing the call to `CORINFO_HELP_MON_EXIT` /  `CORINFO_HELP_MON_EXIT_STATIC` in the finally.
+# 同期メソッド
+
+JIT32/RyuJIT はメソッドが同期化されている場合、エピローグを1つだけ生成し（すべての return をそこにブランチさせ）ます。`Compiler::fgAddSyncMethodEnterExit()` を参照してください。ユーザーコードは try/finally でラップされます。try 本体の外側/前で、コードはブール値を false に初期化します。`CORINFO_HELP_MON_ENTER` または `CORINFO_HELP_MON_ENTER_STATIC` が呼び出され、ロックオブジェクト（インスタンスメソッドの場合は `this` ポインタ、静的メソッドの場合は Type オブジェクト）とブール値のアドレスが渡されます。ロックが取得されると、ブール値が true に設定されます（Thread.Abort/EH/GC などがブール値とロックの取得状態が一致しないときにスレッドを中断できないという意味で「アトミック」な操作です）。JIT32/RyuJIT は finally 内の `CORINFO_HELP_MON_EXIT` / `CORINFO_HELP_MON_EXIT_STATIC` の呼び出し配置についてまったく同じロジックと引数に従います。
 
 # Rejit
 
-For AMD64 to support profiler attach scenarios, the JIT can be required to ensure every generated method is hot patchable (see `CORJIT_FLG_PROF_REJIT_NOPS`). The way we do this is to ensure that the first 5 bytes of code are non-interruptible and there is no branch target within those bytes (includes calls/returns). Thus the VM can stop all threads (like for a GC) and safely replace those 5 bytes with a branch to a new version of the method (presumably instrumented by a profiler). The JIT adds NOPs or increases the size of the prolog reported in the GC info to accomplish these 2 requirements.
+AMD64 でプロファイラーアタッチシナリオをサポートするために、JIT は生成されるすべてのメソッドがホットパッチ可能であることを保証するよう要求される場合があります（`CORJIT_FLG_PROF_REJIT_NOPS` を参照）。これを実現する方法は、コードの最初の5バイトが非割り込み可能であり、それらのバイト内にブランチターゲットがないこと（呼び出し/リターンを含む）を保証することです。これにより、VM は（GC のときと同様に）すべてのスレッドを停止し、安全にその5バイトをメソッドの新バージョン（おそらくプロファイラーによってインストルメントされたもの）へのブランチに置き換えることができます。JIT はこれらの2つの要件を達成するために NOP を追加するか、GC 情報で報告されるプロローグのサイズを増やします。
 
-In a function with exception handling, only the main function is affected; the funclet prologs are not made hot patchable.
+例外処理を持つ関数では、メイン関数のみが影響を受けます。ファンクレットのプロローグはホットパッチ可能にはされません。
 
-# Edit and Continue
+# エディットアンドコンティニュー
 
-Edit and Continue (EnC) is a special flavor of un-optimized code. The debugger has to be able to reliably remap a method state (instruction pointer and local variables) from original method code to edited method code. This puts constraints on the method stack layout performed by the JIT. The key constraint is that the addresses of the existing locals must stay the same after the edit. This constraint is required because the address of the local could have been stored in the method state.
+::: tip 💡 初心者向け補足
+エディットアンドコンティニュー (Edit and Continue, EnC) は、デバッグ中にアプリケーションを再起動することなくコードを変更できるデバッガ機能です。Java の HotSwap や、.NET のホットリロード (Hot Reload) に類似した概念です。開発者はブレークポイントで停止中にコードを編集し、そのまま実行を継続できます。
+:::
 
-In the current design, the JIT does not have access to the previous versions of the method and so it has to assume the worst case. EnC is designed for simplicity, not for performance of the generated code.
+エディットアンドコンティニュー (EnC) は最適化されていないコードの特殊な形態です。デバッガは、メソッドの状態（命令ポインタとローカル変数）を元のメソッドコードから編集後のメソッドコードに確実に再マッピングできなければなりません。これは JIT が行うメソッドのスタックレイアウトに制約を課します。主要な制約は、既存のローカル変数のアドレスが編集後も同じでなければならないことです。この制約が必要なのは、ローカル変数のアドレスがメソッドの状態に格納されている可能性があるためです。
 
-EnC is currently enabled on x86, x64 and ARM64 only, but the same principles would apply if it is ever enabled on other platforms.
+現在の設計では、JIT はメソッドの以前のバージョンにアクセスできないため、最悪のケースを想定する必要があります。EnC は生成されるコードのパフォーマンスではなく、シンプルさのために設計されています。
 
-The following sections describe the various Edit and Continue code conventions that must be followed.
+EnC は現在 x86、x64、ARM64 でのみ有効ですが、他のプラットフォームで有効にされた場合も同じ原則が適用されます。
 
-## EnC flag in GCInfo
+以下のセクションでは、従わなければならないさまざまな EnC コード規約について説明します。
 
-The JIT records the fact that it has followed conventions for EnC code in GC Info. On x64/ARM64, this flag is implied by recording the size of the stack frame region preserved between EnC edits (`GcInfoEncoder::SetSizeOfEditAndContinuePreservedArea`). For x64 the size of this region is increased to include `RSI` and `RDI`, so that `rep stos` can be used for block initialization and block moves. ARM64 saves only the FP and LR registers when EnC is enabled and does not use other callee saved registers.
+## GCInfo の EnC フラグ
 
-To successfully perform EnC transitions the runtime needs to know the size of the stack frames it is transitioning between. For x64 code the size can be extracted from unwind codes. This is not possible for arm64 code as the frames are set up in such a way that the unwind codes do not allow to retrieve this value. Therefore, on ARM64 the GC info contains also the size of the fixed stack frame to be used for EnC purposes.
+JIT は EnC コードの規約に従ったことを GC 情報に記録します。x64/ARM64 では、このフラグは EnC 編集間で保持されるスタックフレーム領域のサイズを記録すること（`GcInfoEncoder::SetSizeOfEditAndContinuePreservedArea`）によって暗示されます。x64 ではこの領域のサイズが `RSI` と `RDI` を含むように拡張され、ブロック初期化やブロックムーブに `rep stos` を使用できるようになります。ARM64 は EnC が有効な場合、FP と LR レジスタのみを保存し、他のカリー保存レジスタは使用しません。
 
-## Allocating local variables backward
+EnC 遷移を正常に実行するために、ランタイムは遷移元と遷移先のスタックフレームのサイズを知る必要があります。x64 コードの場合、サイズはアンワインドコードから抽出できます。arm64 コードではフレームの設定方法によりアンワインドコードからこの値を取得できないため、ARM64 では GC 情報に EnC 目的で使用する固定スタックフレームのサイズも含まれます。
 
-This is required to preserve addresses of the existing locals when an EnC edit appends new ones. In other words, the first local must be allocated at the highest stack address. Special care has to be taken to deal with alignment. The total size of the method frame can either grow (more locals added) or shrink (fewer temps needed) after the edit. The VM zeros out newly added locals.
+## ローカル変数の逆方向への割り当て
 
-## Fixed set of callee-saved registers
+EnC 編集で新しいローカル変数が追加された場合に既存のローカル変数のアドレスを保持するために必要です。つまり、最初のローカル変数は最も高いスタックアドレスに割り当てられなければなりません。アラインメントの処理には特別な注意が必要です。メソッドフレームの合計サイズは、編集後に増加（ローカル変数の追加）することも減少（テンポラリの減少）することもあります。VM は新しく追加されたローカル変数をゼロクリアします。
 
-This eliminates need to deal with the different sets in the VM, and makes preservation of local addresses easier. There are plenty of volatile registers and so lack of non-volatile registers does not heavily impact quality of non-optimized code.
-x64 currently saves RBP, RSI and RDI while ARM64 saves just FP and LR.
+## カリー保存レジスタの固定セット
 
-## EnC is supported for methods with EH
+これにより VM で異なるレジスタセットに対応する必要がなくなり、ローカル変数のアドレスの保持が容易になります。揮発性レジスタは十分にあるため、非揮発性レジスタの不足は最適化されていないコードの品質に大きな影響を与えません。
+x64 では現在 RBP、RSI、RDI を保存し、ARM64 では FP と LR のみを保存します。
 
-However, EnC remap is not supported inside funclets. The stack layout of funclets does not matter for EnC.
+## EnC は EH を持つメソッドでサポートされます
+
+ただし、EnC の再マッピングはファンクレット内ではサポートされません。ファンクレットのスタックレイアウトは EnC には関係ありません。
 
 ## Localloc
 
-Localloc is allowed in EnC code, but remap is disallowed after the method has executed a localloc instruction. VM uses the invariants above (`RSP == RBP` on x64, `FP + 16 == SP + stack size` on ARM64) to detect whether localloc was executed by the method.
+EnC コードで Localloc は許可されますが、メソッドが localloc 命令を実行した後は再マッピングが禁止されます。VM は上記の不変条件（x64 では `RSP == RBP`、ARM64 では `FP + 16 == SP + stack size`）を使用して、メソッドが localloc を実行したかどうかを検出します。
 
-## Security object
+## セキュリティオブジェクト
 
-This does not require any special handling by the JIT on x64/arm64. (Different from x86). The security object is copied over by the VM during remap if necessary. Location of security object is found via GC info.
+x64/arm64 では JIT による特別な処理は不要です（x86 とは異なります）。セキュリティオブジェクトは必要に応じて再マッピング中に VM によってコピーされます。セキュリティオブジェクトの場所は GC 情報から見つけられます。
 
-## Synchronized methods
+## 同期メソッド
 
-The extra state created by the JIT for synchronized methods (lock taken flag) must be preserved during remap. The JIT stores this state in the preserved region, and increases the size of the preserved region reported in GC info accordingly.
+JIT が同期メソッドのために作成する追加の状態（ロック取得フラグ）は再マッピング中に保持されなければなりません。JIT はこの状態を保持領域に格納し、GC 情報で報告される保持領域のサイズをそれに応じて増加させます。
 
-## Generics
+## ジェネリクス
 
-EnC is supported for adding and editing generic methods and methods on generic types and generic methods on non-generic types.
+EnC はジェネリックメソッドの追加と編集、ジェネリック型のメソッド、および非ジェネリック型のジェネリックメソッドでサポートされています。
 
-## Async methods
+## 非同期メソッド
 
-The JIT saves the current `ExecutionContext` and `SynchronizationContext` in runtime async methods and these must be preserved during remap. The new GC encoder includes the state in the EnC frame header size, while for JIT32 the EE expects this state to exist when `CORINFO_ASYNC_SAVE_CONTEXTS` was reported to the JIT from `getMethodInfo`.
+JIT はランタイム非同期メソッドで現在の `ExecutionContext` と `SynchronizationContext` を保存し、これらは再マッピング中に保持されなければなりません。新しい GC エンコーダはこの状態を EnC フレームヘッダサイズに含めます。JIT32 の場合、EE は `getMethodInfo` から `CORINFO_ASYNC_SAVE_CONTEXTS` が報告されたときにこの状態が存在することを期待します。
 
-# Portable entrypoints
+# ポータブルエントリポイント
 
-On platforms that allow dynamic code generation, the runtime abstracts away execution strategies for dynamically loaded methods by allocating [`Precode`](./method-descriptor#precode)s. The `Precode` is a small code fragment that is used as a temporary method entrypoint until the actual method code is acquired. `Precode`s are also used as part of the execution for methods that do not have regular JITed or AOT-compiled code, for example stubs or interpreted methods. `Precode`s allow native code to use the same native code calling convention irrespective of the execution strategy used by the target method.
+動的コード生成を許可するプラットフォームでは、ランタイムは動的にロードされたメソッドの実行戦略を [`Precode`](./method-descriptor#precode) を割り当てることで抽象化します。`Precode` は実際のメソッドコードが取得されるまでの一時的なメソッドエントリポイントとして使用される小さなコードフラグメントです。`Precode` は通常の JIT コンパイルまたは AOT コンパイルされたコードを持たないメソッド（例えばスタブやインタープリタメソッド）の実行の一部としても使用されます。`Precode` により、ターゲットメソッドが使用する実行戦略に関係なく、ネイティブコードは同じネイティブコード呼び出し規約を使用できます。
 
-On platforms that do not allow dynamic code generation (Wasm), the runtime abstracts away execution strategies by allocating portable entrypoints for dynamically loaded methods. The `PortableEntryPoint` is a data structure that allows efficient transition to the desired execution strategy for the target method. When the runtime is configured to use portable entrypoints, the managed calling convention is modified as follows:
+動的コード生成を許可しないプラットフォーム（Wasm）では、ランタイムは動的にロードされたメソッドにポータブルエントリポイント (portable entrypoint) を割り当てることで実行戦略を抽象化します。`PortableEntryPoint` はターゲットメソッドの目的の実行戦略への効率的な遷移を可能にするデータ構造です。ランタイムがポータブルエントリポイントを使用するように構成されている場合、マネージド呼び出し規約は以下のように変更されます：
 
-- The native code to call is obtained by dereferencing the entrypoint
+- 呼び出すネイティブコードはエントリポイントを逆参照することで取得されます
 
-- The entrypoint address is passed in as an extra last hidden argument. The extra hidden argument must be present in signatures of all methods. It is unused by the code of JITed or AOT-compiled methods.
+- エントリポイントアドレスは追加の最後の隠し引数として渡されます。この追加の隠し引数はすべてのメソッドのシグネチャに存在しなければなりません。JIT コンパイルまたは AOT コンパイルされたメソッドのコードでは使用されません。
 
-Pseudo code for a call with portable entrypoints:
+ポータブルエントリポイントを使用した呼び出しの擬似コード：
 
 > `(*(void**)pfn)(arg0, arg1, ..., argN, pfn)`
 
-Portable entrypoints are used for Wasm with interpreter only currently. Note that portable entrypoints are unnecessary for Wasm with native AOT since native AOT does not support dynamic loading.
+ポータブルエントリポイントは現在 Wasm のインタープリタでのみ使用されています。Native AOT は動的ロードをサポートしないため、Wasm の Native AOT ではポータブルエントリポイントは不要です。
 
-# System V x86_64 support
+# System V x86_64 サポート
 
-This section relates mostly to calling conventions on System V systems (such as Ubuntu Linux and Mac OS X).
-The general rules outlined in the System V x86_64 ABI documentation are followed with a few exceptions, described below:
+::: tip 💡 初心者向け補足
+System V は Linux や macOS で使用される標準的な ABI (Application Binary Interface) です。Windows は独自の ABI を使用しており、レジスタの使い方や呼び出し規約が異なります。たとえば、Windows AMD64 では最初の整数引数を RCX で渡しますが、System V では RDI を使います。この違いを理解することは、クロスプラットフォームの .NET ランタイム開発において重要です。
+:::
 
-1. The hidden argument for by-value passed structs is always after the `this` parameter (if there is one). This is a difference with the System V ABI and affects only the internal JIT calling conventions. For PInvoke calls the hidden argument is always the first parameter since there is no `this` parameter in this case (except for the `CallConvMemberFunction` case).
-2. Managed structs that have no fields are always passed by-value on the stack.
-3. The JIT proactively generates frame register frames (with `RBP` as a frame register) in order to aid the native OS tooling for stack unwinding and the like.
-4. All the other internal VM contracts for PInvoke, EH, and generic support remains in place. Please see the relevant sections above for more details. Note, however, that the registers used are different on System V due to the different calling convention. For example, the integer argument registers are, in order, RDI, RSI, RDX, RCX, R8, and R9. Thus, where the first argument (typically, the `this` pointer) on Windows AMD64 goes in RCX, on System V it goes in RDI, and so forth.
-5. Structs with explicit layout are always passed by value on the stack.
-6. The following table describes register usage according to the System V x86_64 ABI
+このセクションは主に System V システム (Ubuntu Linux や Mac OS X など) における呼び出し規約に関するものです。
+System V x86_64 ABI ドキュメントに記載されている一般的なルールに従いますが、以下に示すいくつかの例外があります。
+
+1. 値渡しの構造体に対する隠し引数は、常に `this` パラメータの後に配置されます (存在する場合)。これは System V ABI との違いであり、内部 JIT 呼び出し規約にのみ影響します。PInvoke 呼び出しでは、この場合 `this` パラメータが存在しないため、隠し引数は常に最初のパラメータになります (`CallConvMemberFunction` の場合を除く)。
+2. フィールドを持たないマネージド構造体は、常にスタック上で値渡しされます。
+3. JIT は、ネイティブ OS ツールによるスタックアンワインドなどを支援するために、フレームレジスタフレーム (`RBP` をフレームレジスタとして使用) を積極的に生成します。
+4. PInvoke、EH、およびジェネリクスサポートに関する他のすべての内部 VM 規約はそのまま維持されます。詳細については上記の関連セクションを参照してください。ただし、異なる呼び出し規約のため、System V では使用されるレジスタが異なることに注意してください。たとえば、整数引数レジスタは順に RDI、RSI、RDX、RCX、R8、R9 です。したがって、Windows AMD64 では最初の引数 (通常は `this` ポインタ) が RCX に入りますが、System V では RDI に入ります。
+5. 明示的レイアウト (explicit layout) を持つ構造体は、常にスタック上で値渡しされます。
+6. 以下の表は System V x86_64 ABI に基づくレジスタ使用法を説明しています。
 
 ```
 | Register      | Usage                                   | Preserved across  |
@@ -606,68 +660,72 @@ The general rules outlined in the System V x86_64 ABI documentation are followed
 | %xmm8-%xmm31  | temporary registers                     | No                |
 ```
 
-# Calling convention specifics for x86
+# x86 の呼び出し規約の詳細
 
-Unlike the other architectures that RyuJIT supports, the managed x86 calling convention is different than the default native calling convention. This is true for both Windows and Unix x86.
+RyuJIT がサポートする他のアーキテクチャとは異なり、マネージド x86 呼び出し規約はデフォルトのネイティブ呼び出し規約とは異なります。これは Windows と Unix の x86 の両方に当てはまります。
 
-The standard managed calling convention is a variation on the Windows x86 fastcall convention. It differs primarily in the order in which arguments are pushed on the stack.
+標準的なマネージド呼び出し規約は、Windows x86 の fastcall 規約のバリエーションです。主に引数がスタックにプッシュされる順序が異なります。
 
-The only values that can be passed in registers are managed and unmanaged pointers, object references, and the built-in integer types int8, unsigned int8, int16, unsigned int16, int32, unsigned it32, native int, native unsigned int, and enums and value types with only one 4-byte integer primitive-type field. Enums are passed as their underlying type. All floating-point values and 8-byte integer values are passed on the stack. When the return type is a value type that cannot be passed in a register, the caller shall create a buffer to hold the result and pass the address of this buffer as a hidden parameter.
+レジスタで渡すことができる値は、マネージドおよびアンマネージドポインタ、オブジェクト参照、および組み込み整数型 (int8、unsigned int8、int16、unsigned int16、int32、unsigned int32、native int、native unsigned int)、および 4 バイト整数プリミティブ型フィールドを 1 つだけ持つ列挙型と値型のみです。列挙型はその基底型として渡されます。すべての浮動小数点値と 8 バイト整数値はスタック上で渡されます。戻り値の型がレジスタで渡すことができない値型の場合、呼び出し元は結果を保持するバッファを作成し、このバッファのアドレスを隠しパラメータとして渡す必要があります。
 
-Arguments are passed in left-to-right order, starting with the `this` pointer (for instance and virtual methods), followed by the return buffer pointer if needed, followed by the user-specified argument values. The first of these that can be placed in a register is put into ECX, the next in EDX, and all subsequent ones are passed on the stack. This is in contrast with the x86 native calling conventions, which push arguments onto the stack in right-to-left order.
+引数は左から右の順序で渡されます。`this` ポインタ (インスタンスメソッドおよび仮想メソッドの場合) から始まり、必要に応じてリターンバッファポインタが続き、その後にユーザー指定の引数値が続きます。レジスタに配置できる最初の引数は ECX に、次の引数は EDX に入り、残りはすべてスタック上で渡されます。これは、引数を右から左の順序でスタックにプッシュする x86 ネイティブ呼び出し規約とは対照的です。
 
-The return value is handled as follows:
+戻り値は以下のように処理されます。
 
-1. Floating-point values are returned on the top of the hardware FP stack.
-2. Integers up to 32 bits long are returned in EAX.
-3. 64-bit integers are passed with EAX holding the least significant 32 bits and EDX holding the most significant 32 bits.
-4. All other cases require the use of a return buffer, through which the value is returned. See [Return buffers](#return-buffers).
+1. 浮動小数点値はハードウェア FP スタックの先頭に返されます。
+2. 32 ビット以下の整数は EAX に返されます。
+3. 64 ビット整数は、EAX に下位 32 ビット、EDX に上位 32 ビットを格納して渡されます。
+4. その他のすべてのケースではリターンバッファ (return buffer) を使用する必要があり、それを通じて値が返されます。[リターンバッファ](#return-buffers)を参照してください。
 
-# Control Flow Guard (CFG) support on Windows
+# Windows における制御フローガード (CFG) サポート
 
-Control Flow Guard (CFG) is a security mitigation available in Windows.
-When CFG is enabled, the operating system maintains data structures that can be used to verify whether an address is to be considered a valid indirect call target.
-This mechanism is exposed through two different helper functions, each with different characteristics.
+::: tip 💡 初心者向け補足
+制御フローガード (Control Flow Guard, CFG) は、攻撃者がプログラムの実行フローを乗っ取ることを防止するセキュリティ機能です。具体的には、間接呼び出し (関数ポインタ経由の呼び出しなど) の宛先が正当なものであるかを検証します。バッファオーバーフローなどの脆弱性を悪用して関数ポインタを書き換える攻撃に対する防御策として機能します。
+:::
 
-The first mechanism is a validator that takes the target address as an argument and fails fast if the address is not an expected indirect call target; otherwise, it does nothing and returns.
-The second mechanism is a dispatcher that takes the target address in a non-standard register; on successful validation of the address, it jumps directly to the target function.
-Windows makes the dispatcher available only on ARM64 and x64, while the validator is available on all platforms.
-However, the JIT supports CFG only on ARM64 and x64, with CFG by default being disabled for these platforms.
-The expected use of the CFG feature is for NativeAOT scenarios that are running in constrained environments where CFG is required.
+制御フローガード (CFG) は Windows で利用可能なセキュリティ緩和策です。
+CFG が有効な場合、オペレーティングシステムは、あるアドレスが有効な間接呼び出しターゲットとみなされるかどうかを検証するために使用できるデータ構造を維持します。
+このメカニズムは、それぞれ異なる特性を持つ 2 つの異なるヘルパー関数を通じて公開されます。
 
-The helpers are exposed to the JIT as standard JIT helpers `CORINFO_HELP_VALIDATE_INDIRECT_CALL` and `CORINFO_HELP_DISPATCH_INDIRECT_CALL`.
+最初のメカニズムはバリデータ (validator) であり、ターゲットアドレスを引数として受け取り、そのアドレスが期待される間接呼び出しターゲットでない場合にフェイルファストします。そうでなければ、何もせずに返ります。
+2 番目のメカニズムはディスパッチャ (dispatcher) であり、非標準レジスタでターゲットアドレスを受け取ります。アドレスの検証に成功すると、ターゲット関数に直接ジャンプします。
+Windows はディスパッチャを ARM64 と x64 でのみ利用可能にしていますが、バリデータはすべてのプラットフォームで利用可能です。
+ただし、JIT は ARM64 と x64 でのみ CFG をサポートしており、これらのプラットフォームでは CFG はデフォルトで無効になっています。
+CFG 機能の想定される用途は、CFG が必要とされる制約のある環境で実行される NativeAOT シナリオです。
 
-To use the validator the JIT expands indirect calls into a call to the validator followed by a call to the validated address.
-For the dispatcher the JIT will transform calls to pass the target along but otherwise set up the call as normal.
+ヘルパーは標準的な JIT ヘルパー `CORINFO_HELP_VALIDATE_INDIRECT_CALL` および `CORINFO_HELP_DISPATCH_INDIRECT_CALL` として JIT に公開されます。
 
-Note that "indirect call" here refers to any call that is not to an immediate (in the instruction stream) address.
-For example, even direct calls may emit indirect call instructions in JIT codegen due to e.g. tiering or if they have not been compiled yet; these are expanded with the CFG mechanism as well.
+バリデータを使用するには、JIT は間接呼び出しをバリデータへの呼び出しとそれに続く検証済みアドレスへの呼び出しに展開します。
+ディスパッチャの場合、JIT はターゲットを渡すように呼び出しを変換しますが、それ以外は通常通り呼び出しを設定します。
 
-The next sections describe the calling convention that the JIT expects from these helpers.
+ここでの「間接呼び出し」とは、命令ストリーム内の即値アドレスへの呼び出しではないすべての呼び出しを指すことに注意してください。
+たとえば、直接呼び出しであっても、ティアリング (tiering) やまだコンパイルされていない場合などの理由で、JIT コード生成時に間接呼び出し命令を発行することがあります。これらも CFG メカニズムで展開されます。
 
-## CFG details for ARM64
+以下のセクションでは、JIT がこれらのヘルパーに期待する呼び出し規約について説明します。
 
-On ARM64, `CORINFO_HELP_VALIDATE_INDIRECT_CALL` takes the call address in `x15`.
-In addition to the usual registers it preserves all float registers, `x0`-`x8` and `x15`.
+## ARM64 の CFG の詳細
 
-`CORINFO_HELP_DISPATCH_INDIRECT_CALL` takes the call address in `x9`.
-The JIT does not use the dispatch helper by default due to worse branch predictor performance.
-Therefore it will expand all indirect calls via the validation helper and a manual call.
+ARM64 では、`CORINFO_HELP_VALIDATE_INDIRECT_CALL` は呼び出しアドレスを `x15` で受け取ります。
+通常のレジスタに加えて、すべての浮動小数点レジスタ、`x0`-`x8`、および `x15` を保持します。
 
-## CFG details for x64
+`CORINFO_HELP_DISPATCH_INDIRECT_CALL` は呼び出しアドレスを `x9` で受け取ります。
+JIT は分岐予測器の性能が低下するため、デフォルトではディスパッチヘルパーを使用しません。
+そのため、すべての間接呼び出しをバリデーションヘルパーと手動呼び出しで展開します。
 
-On x64, `CORINFO_HELP_VALIDATE_INDIRECT_CALL` takes the call address in `rcx`.
-In addition to the usual registers it also preserves all float registers, `rcx`, and `r10`; furthermore, shadow stack space is not required to be allocated.
+## x64 の CFG の詳細
 
-`CORINFO_HELP_DISPATCH_INDIRECT_CALL` takes the call address in `rax` and it reserves the right to use and trash `r10` and `r11`.
-The JIT uses the dispatch helper on x64 whenever possible as it is expected that the code size benefits outweighs the less accurate branch prediction.
-However, note that the use of `r11` in the dispatcher makes it incompatible with VSD calls where the JIT must fall back to the validator and a manual call.
+x64 では、`CORINFO_HELP_VALIDATE_INDIRECT_CALL` は呼び出しアドレスを `rcx` で受け取ります。
+通常のレジスタに加えて、すべての浮動小数点レジスタ、`rcx`、および `r10` も保持します。さらに、シャドウスタック空間を割り当てる必要はありません。
 
-# Notes on Memset/Memcpy
+`CORINFO_HELP_DISPATCH_INDIRECT_CALL` は呼び出しアドレスを `rax` で受け取り、`r10` と `r11` を使用および破壊する権利を持ちます。
+JIT はコードサイズの利点がより正確でない分岐予測を上回ると期待されるため、可能な限り x64 でディスパッチヘルパーを使用します。
+ただし、ディスパッチャでの `r11` の使用は VSD 呼び出しと互換性がないため、JIT はバリデータと手動呼び出しにフォールバックする必要があることに注意してください。
 
-Generally, `memset` and `memcpy` do not provide any guarantees of atomicity. This implies that they should only be used when the memory being modified by `memset`/`memcpy` is not observable by any other thread (including GC), or when there are no atomicity requirements according to our [Memory Model](https://github.com/dotnet/runtime/blob/main/docs/specs/Memory-model.md). It's especially important when we modify heap containing managed pointers - those must be updated atomically, e.g. using pointer-sized `mov` instruction (managed pointers are always aligned) - see [Atomic Memory Access](https://github.com/dotnet/runtime/blob/main/docs/specs/Memory-model.md#Atomic-memory-accesses). It's worth noting that by "update" it's implied "set to zero", otherwise, we need a write barrier.
+# Memset/Memcpy に関する注意事項
 
-Examples:
+一般的に、`memset` と `memcpy` はアトミック性 (atomicity) の保証を一切提供しません。つまり、`memset`/`memcpy` で変更されるメモリが他のスレッド (GC を含む) から観測可能でない場合、または[メモリモデル](https://github.com/dotnet/runtime/blob/main/docs/specs/Memory-model.md)に基づくアトミック性の要件がない場合にのみ使用すべきです。特にマネージドポインタを含むヒープを変更する場合は重要です。マネージドポインタはアトミックに更新する必要があります。たとえば、ポインタサイズの `mov` 命令を使用します (マネージドポインタは常にアライメントされています)。詳細は[アトミックメモリアクセス](https://github.com/dotnet/runtime/blob/main/docs/specs/Memory-model.md#Atomic-memory-accesses)を参照してください。「更新」とは「ゼロに設定する」ことを暗示しており、それ以外の場合はライトバリア (write barrier) が必要であることに注意してください。
+
+例:
 
 ```cs
 struct MyStruct
@@ -678,160 +736,172 @@ struct MyStruct
 
 void Test1(ref MyStruct m)
 {
-	// We're not allowed to use memset here
+	// ここでは memset を使用してはいけない
 	m = default;
 }
 
 MyStruct Test2()
 {
-	// We can use memset here
+	// ここでは memset を使用できる
 	return default;
 }
 ```
 
-# Interpreter ABI details
+# インタプリタ ABI の詳細
 
-The interpreter data stack is separately allocated from the normal "thread" stack, and it grows UP. The interpreter execution control stack is allocated on the "thread" stack, as a series of `InterpMethodContextFrame` values that are linked in a singly linked list onto an `InterpreterFrame` which is placed onto the Frame chain of the thread. `InterpMethodContextFrame` structures are always allocated in descending order so that a callee method's associated `InterpMethodContextFrame` is always located lower in memory compared to its caller or the containing `InterpreterFrame`.
+::: tip 💡 初心者向け補足
+.NET ランタイムには JIT コンパイラの代替としてインタプリタ (interpreter) が含まれています。インタプリタは、WebAssembly のような JIT コンパイルが利用できない環境や、起動時間を短縮したい場合に使用されます。Java のバイトコードインタプリタと同様に、IL コードを直接解釈実行しますが、JIT コンパイルされたコードよりも実行速度は遅くなります。
+:::
 
-The base stack pointer within a method never changes, but when a function is called in the interpreter it will have a stack pointer which is associated with the set of arguments passed. In effect argument passing is done by giving a portion of the temporary args space of the caller function to the callee.
+インタプリタのデータスタックは通常の「スレッド」スタックとは別に割り当てられ、上方向 (UP) に成長します。インタプリタの実行制御スタックは「スレッド」スタック上に割り当てられ、スレッドの Frame チェーンに配置される `InterpreterFrame` に対して単方向リンクリストで連結された一連の `InterpMethodContextFrame` 値として構成されます。`InterpMethodContextFrame` 構造体は常に降順に割り当てられるため、呼び出し先メソッドに関連する `InterpMethodContextFrame` は、その呼び出し元や含まれている `InterpreterFrame` よりも常にメモリ上の低いアドレスに配置されます。
 
-All instructions and GC that address the stack pointer are relative to the current stack pointer, which does not move. This requires that implementations of the localloc instruction actually allocate the memory on the heap, and localloc'd memory is not actually tied to the data stack in any way.
+メソッド内のベーススタックポインタは変化しませんが、インタプリタ内で関数が呼び出されると、渡された引数のセットに関連付けられたスタックポインタを持ちます。実質的に、引数渡しは呼び出し元関数の一時引数空間の一部を呼び出し先に与えることで行われます。
 
-The stack pointer in all interpreter functions is always aligned on a `INTERP_STACK_ALIGNMENT` boundary. Currently this is a 16 byte alignment requirement.
+すべての命令と GC はスタックポインタからの相対アドレスで参照され、スタックポインタは移動しません。このため、localloc 命令の実装は実際にはヒープ上にメモリを割り当てる必要があり、localloc で割り当てられたメモリはデータスタックとは一切関連付けられません。
 
-The stack elements are always aligned to at least `INTERP_STACK_SLOT_SIZE` and never more than `INTERP_STACK_ALIGNMENT` Given that today's implementation sets `INTERP_STACK_SLOT_SIZE` to 8 and `INTERP_STACK_ALIGNMENT` to 16, this implies all data on the stack is either aligned at an 8 or 16 byte alignment.
+すべてのインタプリタ関数のスタックポインタは常に `INTERP_STACK_ALIGNMENT` 境界でアライメントされています。現在、これは 16 バイトのアライメント要件です。
 
-Primitive types smaller than 4 bytes are always zero or sign extended to 4 bytes when on the stack.
+スタック要素は常に少なくとも `INTERP_STACK_SLOT_SIZE` でアライメントされ、`INTERP_STACK_ALIGNMENT` を超えることはありません。現在の実装では `INTERP_STACK_SLOT_SIZE` を 8、`INTERP_STACK_ALIGNMENT` を 16 に設定しているため、スタック上のすべてのデータは 8 バイトまたは 16 バイトのアライメントになります。
 
-When a function is async it will have a continuation return. This return is not done using the data stack, but instead is done by setting the Continuation field in the `InterpreterFrame`. Thunks are responsible for setting/resetting this value as we enter/leave code compiled by the JIT.
+4 バイト未満のプリミティブ型は、スタック上では常にゼロ拡張または符号拡張されて 4 バイトになります。
 
-# Web Assembly ABI (R2R and JIT)
+関数が非同期 (async) の場合、継続リターン (continuation return) を持ちます。このリターンはデータスタックを使用せず、`InterpreterFrame` の Continuation フィールドを設定することで行われます。サンク (thunk) は、JIT でコンパイルされたコードに入る/出る際にこの値を設定/リセットする役割を担います。
 
-For managed methods compiled to Web Assembly (hereafter "managed code") the CLR generally follows the [Wasm Basic C ABI](https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md).
+# Web Assembly ABI (R2R および JIT)
 
-Managed code uses the same linear stack as C code. The stack grows down.
+Web Assembly にコンパイルされたマネージドメソッド (以下「マネージドコード」) では、CLR は一般的に [Wasm Basic C ABI](https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md) に従います。
 
-## Incoming argument ABI
+マネージドコードは C コードと同じリニアスタック (linear stack) を使用します。スタックは下方向に成長します。
 
-The linear stack pointer `$sp` is the first argument to all methods. At a native->managed transition it is the value of the `$__stack_pointer` global. This global may be updated to the current `$sp` within managed code, and must be up to date with the current `$sp` at managed->native boundaries. Within the method the stack pointer always points at the bottom (lowest address) of the stack; generally this is a fixed offset from the value the stack pointer held on entry, except in methods that can do dynamic allocation.
+## 受信引数 ABI
 
-A frame pointer, if used, points at the bottom of the "fixed" portion of the stack to facilitate use of Wasm addressing modes, which only allow positive offsets.
+リニアスタックポインタ `$sp` はすべてのメソッドの最初の引数です。ネイティブからマネージドへの遷移時には、`$__stack_pointer` グローバルの値になります。このグローバルはマネージドコード内で現在の `$sp` に更新される場合があり、マネージドからネイティブへの境界では現在の `$sp` と同期している必要があります。メソッド内では、スタックポインタは常にスタックの底 (最低アドレス) を指します。一般的にこれはエントリ時のスタックポインタの値からの固定オフセットですが、動的割り当てが可能なメソッドでは例外です。
 
-Structs are generally passed by-reference, unless they happen to exactly contain a single primitive field (or be a struct exactly containing such a struct). The linear stack provides the backing storage for the by-reference structs.
+フレームポインタが使用される場合、スタックの「固定」部分の底を指し、正のオフセットのみを許可する Wasm アドレッシングモードの使用を容易にします。
 
-Structs are generally returned via hidden buffers, whose address is supplied by the caller and passed just after the managed `this`, or after `$sp` argument when `this` is not present. In such cases the return value of the method is the address of the return value. But if the struct can be passed on the Wasm stack it is returned on the Wasm stack.
+構造体は一般的に参照渡し (by-reference) されます。ただし、単一のプリミティブフィールドを正確に含む場合 (またはそのような構造体を正確に含む構造体の場合) は例外です。リニアスタックが参照渡し構造体のバッキングストレージを提供します。
 
-(TBD: ABI for vector types)
+構造体は一般的に隠しバッファ (hidden buffer) を通じて返されます。そのアドレスは呼び出し元によって提供され、マネージド `this` の直後に渡されるか、`this` が存在しない場合は `$sp` 引数の後に渡されます。この場合、メソッドの戻り値は戻り値のアドレスです。ただし、構造体が Wasm スタック上で渡すことができる場合は、Wasm スタック上で返されます。
 
-### Prolog
+(未定: ベクトル型の ABI)
 
-The prolog will increment the stack pointer, home any arguments that are stored on the linear stack, and zero initialize slots on the linear stack as appropriate. It will establish a frame pointer if one is needed.
+### プロローグ
 
-It will also save a frame descriptor onto the stack, for use during GC and EH. For methods with EH or with GC safe points, a slot on the linear stack will be reserved for a "virtual IP" that will index into the EH and GC info to provide within-method information and allow external code to walk the managed stack frames.
+プロローグはスタックポインタをインクリメントし、リニアスタックに格納された引数をホームし、リニアスタックのスロットを適切にゼロ初期化します。必要に応じてフレームポインタを確立します。
 
-### Epilog
+また、GC と EH で使用するためにフレームディスクリプタをスタックに保存します。EH または GC セーフポイントを持つメソッドでは、EH および GC 情報にインデックスを提供してメソッド内の情報を提供し、外部コードがマネージドスタックフレームをウォークできるようにする「仮想 IP」用のスロットがリニアスタックに予約されます。
 
-Generally epilogs will be empty. There is no notion of callee-save registers in Wasm, and no other global state to update.
+### エピローグ
 
-## Outgoing call ABI
+一般的にエピローグは空になります。Wasm にはカリーセーブレジスタ (callee-save register) の概念がなく、更新すべき他のグローバル状態もありません。
 
-For direct managed calls, Wasm uses the Portable Entry Point feature to facilitate smooth interop with interpreted code. This means all managed calls are made indirectly, and the portable entry point is also passed as the last argument.
+## 送信呼び出し ABI
 
-The call sequence will then be
+直接マネージド呼び出しでは、Wasm はポータブルエントリポイント (Portable Entry Point) 機能を使用して、インタプリタコードとのスムーズな相互運用を実現します。これはすべてのマネージド呼び出しが間接的に行われ、ポータブルエントリポイントも最後の引数として渡されることを意味します。
+
+呼び出しシーケンスは以下のようになります。
+
 ```
 local.get sp
 push arg 0
 ...
 push arg N-1
-load PortableEntryPointPtr   ;; pushes address of portable entry point (&pe)
+load PortableEntryPointPtr   ;; ポータブルエントリポイントのアドレスをプッシュ (&pe)
 dup
 load CellIndex (from &pe)
 call_indirect <tableIndex> <sigIndex>  (sig is: int32 (sp) arg0... argN-1 int32 (&pe))
 ```
-Initially the cell will contain code to determine if the target method has R2R code or must be interpreted. If there is R2R code for the method it is validated and fixed up as needed. Once the target is resolved the cell can be updated to just refer to the R2R code directly, if there is any, or to a thunk for invoking the interpreter.
 
-For virtual managed calls the sequence is similar, but the portable entry point is obtained by calling a resolve helper:
+最初はセルにターゲットメソッドが R2R コードを持つかインタプリタで実行する必要があるかを判定するコードが含まれます。メソッドに R2R コードがある場合、検証および必要に応じて修正されます。ターゲットが解決されると、セルは R2R コードがあればそれを直接参照するか、インタプリタを呼び出すためのサンクを参照するように更新できます。
+
+仮想マネージド呼び出しのシーケンスは類似していますが、ポータブルエントリポイントは resolve ヘルパーを呼び出すことで取得されます。
+
 ```
 local.get sp
 push arg 0
 ...
 push arg N-1
 ... push args for resolution ...
-call resolve                     ;; pushes address of portable entry point (&pe)
+call resolve                     ;; ポータブルエントリポイントのアドレスをプッシュ (&pe)
 dup
-load CellIndex (from &pe)        ;; pushes Wasm function table index of the code to invoke
+load CellIndex (from &pe)        ;; 呼び出すコードの Wasm 関数テーブルインデックスをプッシュ
 
 call_indirect <tableIndex> <sigIndex>  (sig is: int32 (sp) arg0... argN-1 int32 (&pe))
 ```
-Because the `&pe` arg must be passed to the portable entrypoint, all method signatures must reflect the extra final argument (even though it will be unused). Thus for example a managed method like `int F(int x)` will have a Wasm signature `(func (param int32 int32 int32) (result int32))`.
 
-Alternatively we may choose to pass the `&pe` via a Wasm global.
+`&pe` 引数はポータブルエントリポイントに渡す必要があるため、すべてのメソッドシグネチャは追加の最終引数を反映する必要があります (使用されなくても)。したがって、たとえば `int F(int x)` のようなマネージドメソッドは Wasm シグネチャ `(func (param int32 int32 int32) (result int32))` を持ちます。
 
-As an optimization, for vtable-based virtual managed calls, codegen may fetch the portable entry point from the appropriate vtable slot instead of calling the resolve helper.
+代替として、`&pe` を Wasm グローバルを通じて渡すことも選択できます。
 
-As an optimization, if it is known that the callee is also compiled R2R, the caller can invoke the callee directly. Since R2R method bodies may be invalidated at runtime, validation of that the callee's R2R must be done when validating the caller's R2R.
+最適化として、vtable ベースの仮想マネージド呼び出しでは、resolve ヘルパーを呼び出す代わりに、適切な vtable スロットからポータブルエントリポイントを取得できます。
 
-FCalls implemented in native code will follow the same managed calling convention. FCall implementation macros (`FCIMPL`) will be modified to produce a small inline assembly wrapper that re-establishes `$__stack_pointer`.
+最適化として、呼び出し先も R2R でコンパイルされていることがわかっている場合、呼び出し元は呼び出し先を直接呼び出すことができます。R2R メソッドボディは実行時に無効化される可能性があるため、呼び出し先の R2R の検証は呼び出し元の R2R の検証時に行う必要があります。
 
-## GC References at Call Sites
+ネイティブコードで実装された FCall は同じマネージド呼び出し規約に従います。FCall 実装マクロ (`FCIMPL`) は `$__stack_pointer` を再確立する小さなインラインアセンブリラッパーを生成するように変更されます。
 
-Wasm does not allow for outside access to the Wasm stack. So, before call sites that may trigger GC, all GC references live after the call (and all untracked GC references, which are effectively always live) must be saved to the linear stack. These GC references will be reported as pinned to the GC so that if they normally live in Wasm locals those locals do not need to be updated after the call. The live GC slots on the linear stack will be identified by the virtual IP (also stored on the linear stack) and the GC info (accessible from the frame descriptor, also on the linear stack).
+## 呼び出しサイトにおける GC 参照
 
-So for example if we have code like `x(a, y(b)); ... a; ... b;` where `a` and `b` are gc refs that initially are in Wasm locals, this fragment would compile into something like
+Wasm は Wasm スタックへの外部アクセスを許可しません。そのため、GC をトリガーする可能性のある呼び出しサイトの前に、呼び出し後も生存するすべての GC 参照 (および追跡されないすべての GC 参照、これらは実質的に常に生存) をリニアスタックに保存する必要があります。これらの GC 参照は GC にピン留め (pinned) として報告されるため、通常 Wasm ローカルに存在する場合でも、呼び出し後にそれらのローカルを更新する必要がありません。リニアスタック上の生存 GC スロットは、仮想 IP (これもリニアスタックに格納) と GC 情報 (フレームディスクリプタからアクセス可能、これもリニアスタック上) によって識別されます。
+
+たとえば、`x(a, y(b)); ... a; ... b;` のようなコードがあり、`a` と `b` が最初に Wasm ローカルにある GC 参照であるとすると、このフラグメントは以下のようにコンパイルされます。
+
 ```
-;; sp for call to x
+;; x への呼び出し用の sp
 local.get sp
 
-;; spill a to linear memory
+;; a をリニアメモリにスピル
 local.get sp
 local.get a
 i32.store offset=(a's offset in gc area of stack)
 
-;; arg a for call to x
+;; x への呼び出し用の引数 a
 local.get a
 
-;; sp for call to y
+;; y への呼び出し用の sp
 local.get sp
 
-;; spill b to linear memory
+;; b をリニアメモリにスピル
 local.get sp
 local.get b
 i32.store offset=(b's offset in gc area of stack)
 
-;; arg b for call to y
+;; y への呼び出し用の引数 b
 local.get b
 
-;; update virtual IP for call to y with live gc refs
+;; 生存 GC 参照を持つ y への呼び出し用に仮想 IP を更新
 local.get sp
 i32.const virtual-ip-for-call-to-y  (gc info : a and b slots live)
 i32.store offset=(virtual-ip offset)
 
-;; fetch &pe for y and cell index from &pe, call y
+;; y の &pe とセルインデックスを取得し、y を呼び出す
 load PortableEntryPointPtr for y
 dup
 load CellIndex (from &pe)
 call_indirect <tableIndex> <sigIndex>  (sig is: int32 (sp) int32 int32 (&pe) : returns int32)
 
-;; update virtual IP for call to x with live gc refs [can be optimized out]
+;; 生存 GC 参照を持つ x への呼び出し用に仮想 IP を更新 [最適化で省略可能]
 local.get sp
 i32.const virtual-ip-for-call-to-x (gc info : a and b slots live)
 i32.store offset=(virtual-ip offset)
 
-;; fetch &pe for x and cell index from &pe, call x
+;; x の &pe とセルインデックスを取得し、x を呼び出す
 load PortableEntryPointPtr for x
 dup
 load CellIndex (from &pe)
 call_indirect <tableIndex> <sigIndex>  (sig is: int32 (sp) int32 int32 (&pe) : returns int32)
 ```
-Notes:
-* As an optimization, we can avoid updating the virtual IP when the GC/EH info it refers to is unchanged from the last update.
-* We may want to un-nest calls, relying on a Wasm local instead of the Wasm stack to convey nested call results to the parent call.
-* As an optimization, we will try and minimize storing gc refs to the linear stack (eg if the value already there hasn't changed from the last update).
-* As an optimization, we may try and have some gc refs primarily live on the linear stack, and not be held in Wasm locals.
 
-## Tail Calls
+注意事項:
 
-For tail calls the only differences are the use of the `return_call_indirect` in the call, and passing the original `sp` value to the callee:
+- 最適化として、GC/EH 情報が前回の更新から変更されていない場合、仮想 IP の更新を省略できます。
+- ネストされた呼び出し結果を親呼び出しに伝えるために、Wasm スタックの代わりに Wasm ローカルを使用して、呼び出しのネストを解除することも考えられます。
+- 最適化として、GC 参照のリニアスタックへの格納を最小限にします (たとえば、前回の更新から値が変更されていない場合)。
+- 最適化として、一部の GC 参照を主にリニアスタック上で保持し、Wasm ローカルには保持しないようにすることも検討できます。
+
+## 末尾呼び出し (Tail Call)
+
+末尾呼び出しとの唯一の違いは、呼び出しで `return_call_indirect` を使用し、元の `sp` 値を呼び出し先に渡すことです。
+
 ```
 local.get sp
 i32.const <frameSize>
@@ -845,32 +915,33 @@ dup
 load CellIndex (from &pe)
 return_call_indirect <tableIndex> <sigIndex>  (sig is: int32 (sp) arg0... argN-1 int32 (&pe))
 ```
-and similarly for indirect managed calls.
+
+間接マネージド呼び出しでも同様です。
 
 ## PInvoke
 
-PInvoke will re-establish `$__stack_pointer` before calling the target.
+PInvoke はターゲットを呼び出す前に `$__stack_pointer` を再確立します。
 
-## Reverse PInvoke
+## リバース PInvoke (Reverse PInvoke)
 
-Reverse PInvoke prolog will load the global `$__stack_pointer` and use it as the managed `sp`.
+リバース PInvoke のプロローグはグローバル `$__stack_pointer` をロードし、マネージド `sp` として使用します。
 
-On return the global `$__stack_pointer` is reset to the value it had on stub entry.
+リターン時に、グローバル `$__stack_pointer` はスタブエントリ時の値にリセットされます。
 
-## Async
+## 非同期 (Async)
 
-TBD
+未定
 
-## Interpreter Stubs
+## インタプリタスタブ
 
-There will be stubs involved in both managed code->interpreter and interpreter->managed code calls. For R2R these will be per signature, generated by crossgen2.
+マネージドコードからインタプリタへの呼び出しとインタプリタからマネージドコードへの呼び出しの両方にスタブが関与します。R2R では、これらはシグネチャごとに crossgen2 によって生成されます。
 
-### Interpreted -> Managed
+### インタプリタからマネージドへ
 
-The interpreter->managed stub will load the global `$__stack_pointer`, then the method arguments from the interpreter stack, and finally `int32.const 0` for the final `&pe` argument, which will be ignored by managed code (that last part can be omitted, if we pass this via a Wasm global instead), and then call the managed method.
+インタプリタからマネージドへのスタブはグローバル `$__stack_pointer` をロードし、次にインタプリタスタックからメソッド引数をロードし、最後にマネージドコードで無視される最終 `&pe` 引数のために `int32.const 0` をロードし (Wasm グローバルを通じて渡す場合はこの最後の部分は省略可能)、そしてマネージドメソッドを呼び出します。
 
-On return the global `$__stack_pointer` is reset to the value it had on stub entry.
+リターン時に、グローバル `$__stack_pointer` はスタブエントリ時の値にリセットされます。
 
-### Managed->Interpreted
+### マネージドからインタプリタへ
 
-This stub will be passed the current managed `sp` and must store it into the global `$__stack_pointer`. The interpreter stack (see above) will be extended with a new `InterpMethodContextFrame` frame, and arguments will be moved from Wasm locals to the frame. The `&pe` argument will then be used to invoke the interpreter on the proper IL method body.
+このスタブには現在のマネージド `sp` が渡され、それをグローバル `$__stack_pointer` に格納する必要があります。インタプリタスタック (上記参照) は新しい `InterpMethodContextFrame` フレームで拡張され、引数は Wasm ローカルからフレームに移動されます。`&pe` 引数は適切な IL メソッドボディでインタプリタを呼び出すために使用されます。
