@@ -9,6 +9,9 @@ hero:
       text: 読みはじめる
       link: /botr-faq
     - theme: alt
+      text: PDF をダウンロード
+      link: https://github.com/openjny/the-book-of-the-runtime-ja/raw/main/the-book-of-the-runtime-ja.pdf
+    - theme: alt
       text: 原文を見る (英語)
       link: https://jurakovic.github.io/runtime/
 features:

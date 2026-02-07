@@ -6,7 +6,8 @@
   "scripts": {
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "docs:pdf": "node scripts/export-pdf.mjs"
   },
   "repository": {
     "type": "git",
@@ -21,6 +22,8 @@
   },
   "homepage": "https://github.com/openjny/the-book-of-the-runtime-ja#readme",
   "devDependencies": {
+    "pdf-lib": "^1.17.1",
+    "playwright": "^1.58.2",
     "vitepress": "^1.6.4"
   }
 }

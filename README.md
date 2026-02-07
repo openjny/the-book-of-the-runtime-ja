@@ -8,6 +8,12 @@
 
 https://openjny.github.io/the-book-of-the-runtime-ja/
 
+## PDF ダウンロード
+
+全チャプターを1つにまとめた PDF 版をダウンロードできます。
+
+[📥 PDF をダウンロード](https://github.com/openjny/the-book-of-the-runtime-ja/raw/main/the-book-of-the-runtime-ja.pdf)
+
 ## 開発
 
 ```bash
@@ -22,6 +28,10 @@ npm run docs:build
 
 # ビルド結果のプレビュー
 npm run docs:preview
+
+# PDF エクスポート（ビルド後に実行）
+npm run docs:build && npm run docs:pdf
+# → dist-pdf/ に個別 PDF と結合 PDF が出力されます
 ```
 
 ## 参考
