@@ -4,9 +4,6 @@
 この章の原文は [Runtime logging for developers](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/logging.md) です。
 :::
 
-Runtime logging for developers
-==============================
-
 Date: Feb. 2024
 
 The .NET runtime codebase is massive, spread across thousands of files in multiple languages. There are thousands of log messages spread throughout that codebase, and most of them are disabled by default. So how do you, a runtime developer beset by all manner of mysterious test failures, get those messages out of the runtime and into your console or log files? And how should you go about adding log messages appropriately to new code you're writing?

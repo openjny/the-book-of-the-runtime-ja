@@ -4,9 +4,6 @@
 この章の原文は [Shared Generics Design](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/shared-generics.md) です。
 :::
 
-Shared Generics Design
-===
-
 Author: Fadi Hanna - 2019
 
 # Introduction

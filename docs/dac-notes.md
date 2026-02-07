@@ -4,9 +4,6 @@
 この章の原文は [Data Access Component (DAC) Notes](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/dac-notes.md) です。
 :::
 
-Data Access Component (DAC) Notes
-=================================
-
 Date: 2007
 
 Debugging managed code requires special knowledge of managed objects and constructs. For example, objects have various kinds of header information in addition to the data itself. Objects may move in memory as the garbage collector does its work. Getting type information may require help from the loader. Retrieving the correct version of a function that has undergone an edit-and-continue or getting information for a function emitted through reflection requires the debugger to be aware of EnC version numbers and metadata. The debugger must be able to distinguish AppDomains and assemblies. The code in the VM directory embodies the necessary knowledge of these managed constructs. This essentially means that APIs to retrieve information about managed code and data must run some of the same algorithms that the execution engine itself runs.

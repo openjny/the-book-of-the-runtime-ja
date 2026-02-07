@@ -4,9 +4,6 @@
 この章の原文は [Stack Walking](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/stackwalking.md) です。
 :::
 
-Stackwalking in the CLR
-===
-
 Author: Rudi Martin ([@Rudi-Martin](https://github.com/Rudi-Martin)) - 2008
 
 The CLR makes heavy use of a technique known as stack walking (or stack crawling). This involves iterating the sequence of call frames for a particular thread, from the most recent (the thread's current function) back down to the base of the stack.

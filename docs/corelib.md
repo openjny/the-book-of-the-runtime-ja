@@ -4,9 +4,6 @@
 この章の原文は [System.Private.CoreLib and calling into the runtime](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/corelib.md) です。
 :::
 
-`System.Private.CoreLib` and calling into the runtime
-===
-
 # Introduction
 
 `System.Private.CoreLib.dll` is the assembly for defining the core parts of the type system, and a good portion of the Base Class Library in .NET Framework. It was originally named `mscorlib` in .NET Core, though many places in the code and documentation still refer to it as `mscorlib`. This document will endeavour to stick to using `System.Private.CoreLib` or CoreLib. Base data types live in this assembly, and it has a tight coupling with the CLR. Here you will learn exactly how and why CoreLib is special and the basics about calling into the CLR from managed code via QCall and FCall methods. It also discusses calling from within the CLR into managed code.

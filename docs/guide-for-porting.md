@@ -4,9 +4,6 @@
 この章の原文は [Guide For Porting](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/guide-for-porting.md) です。
 :::
 
-Guide for porting .NET to a new processor architecture
-========================
-
 This document is broken up into 2 major sections.
 
 1.  The various porting stages of porting the .NET Runtime

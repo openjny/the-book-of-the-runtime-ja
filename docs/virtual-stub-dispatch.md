@@ -4,9 +4,6 @@
 この章の原文は [Virtual Stub Dispatch](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/virtual-stub-dispatch.md) です。
 :::
 
-Virtual Stub Dispatch
-=====================
-
 Author: Simon Hall ([@snwbrdwndsrf](https://github.com/snwbrdwndsrf)) - 2006
 
 Introduction

@@ -4,8 +4,6 @@
 この章の原文は [Vectors and Intrinsics](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/vectors-and-intrinsics.md) です。
 :::
 
-Vectors and Hardware Intrinsics Support
-===
 ---
 
 # Introduction

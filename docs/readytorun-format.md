@@ -4,9 +4,6 @@
 この章の原文は [ReadyToRun File Format](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/readytorun-format.md) です。
 :::
 
-ReadyToRun File Format
-======================
-
 Revisions:
 * 1.1 - [Jan Kotas](https://github.com/jkotas) - 2015
 * 3.1 - [Tomas Rylek](https://github.com/trylek) - 2019

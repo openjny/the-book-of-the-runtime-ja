@@ -4,9 +4,6 @@
 この章の原文は [Method Descriptor](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/method-descriptor.md) です。
 :::
 
-Method Descriptor
-=================
-
 Author: Jan Kotas ([@jkotas](https://github.com/jkotas)) - 2006
 
 Introduction

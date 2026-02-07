@@ -4,9 +4,6 @@
 この章の原文は [Implementing Profilability](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/profilability.md) です。
 :::
 
-Implementing Profilability
-==========================
-
 This document describes technical details of adding profilability to a CLR feature.  This is targeted toward devs who are modifying the profiling API so their feature can be profilable.
 
 Philosophy
